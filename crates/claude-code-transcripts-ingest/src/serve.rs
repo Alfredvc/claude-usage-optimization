@@ -1,7 +1,7 @@
 //! HTTP server for the Claude Code transcript viewer.
 //!
 //! Reads from a DuckDB database built by `claude-code-transcripts-ingest ingest`.
-//! Serves `web/index.html` and a JSON API backed by the DB.
+//! Serves the embedded `web/index.html` and a JSON API backed by the DB.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -765,9 +765,7 @@ pub async fn run(args: ServeArgs) {
     let db_path = args.db.to_string_lossy().into_owned();
     let port = args.port;
 
-    let html = std::fs::read_to_string("web/index.html").unwrap_or_else(|_| {
-        "<h1>web/index.html not found — run from project root</h1>".to_string()
-    });
+    let html = include_str!("../../../web/index.html").to_string();
 
     let state = AppState { db_path, html };
 
