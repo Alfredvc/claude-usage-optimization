@@ -427,6 +427,52 @@ CREATE TABLE IF NOT EXISTS speculation_accept_entries (
 );
 "#;
 
+// Dedup view for billing-safe aggregation over assistant_entries.
+//
+// Why: a single streaming response writes one JSONL entry per content block
+// (thinking + text + tool_use → 3 entries) and all share the same `message.id`
+// and the same `usage` figures (Claude Code mutates the in-memory usage object
+// before flush). Summing `assistant_entries.cost_usd` directly overcounts.
+//
+// Rule: partition by (file_path, message_id), pick the authoritative row:
+//   1. prefer rows with stop_reason set (final entry in the response)
+//   2. then max output_tokens (guards against early partial writes)
+//   3. then lowest entry_id (deterministic tiebreaker)
+//
+// message_id NULL = synthetic error message (is_api_error_message = true,
+// model = '<synthetic>'). Not a billing event. Kept as distinct rows via
+// COALESCE so they are preserved, but cost queries should filter them out.
+pub const DEDUPED_VIEW_DDL: &str = r#"
+CREATE OR REPLACE VIEW assistant_entries_deduped AS
+SELECT ae.*
+FROM assistant_entries ae
+JOIN entries e ON e.entry_id = ae.entry_id
+QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY e.file_path, COALESCE(ae.message_id, 'anon-' || CAST(ae.entry_id AS TEXT))
+    ORDER BY
+        CASE WHEN ae.stop_reason IS NOT NULL THEN 0 ELSE 1 END,
+        ae.output_tokens DESC NULLS LAST,
+        ae.entry_id ASC
+) = 1;
+
+COMMENT ON VIEW assistant_entries_deduped IS
+'Billing-safe dedup of assistant_entries. One row per (file_path, message_id) = one real API billing event. USE THIS for any SUM(cost_usd) / SUM(*_tokens) aggregation. Raw assistant_entries has N rows per response (one per content block) sharing the same usage figures — summing it directly overcounts by ~2-3x. Dedup rule: partition by (file_path, message_id), prefer rows with stop_reason set, then max output_tokens, then min entry_id. Rows with NULL message_id are synthetic error messages (is_api_error_message = true) and were never billed — filter them out for cost queries with `WHERE message_id IS NOT NULL`. See docs/cost-attribution.md for full rationale.';
+
+COMMENT ON COLUMN assistant_entries_deduped.cost_usd IS
+'Safe to SUM. One row per billing event (unlike assistant_entries.cost_usd which is duplicated across content blocks).';
+
+COMMENT ON COLUMN assistant_entries_deduped.input_tokens IS
+'Safe to SUM. Authoritative billing figure (from message_delta). See view-level comment.';
+
+COMMENT ON COLUMN assistant_entries_deduped.output_tokens IS
+'Safe to SUM. Authoritative billing figure. Max-output_tokens tiebreaker guards against partial records written before message_delta arrived.';
+
+COMMENT ON COLUMN assistant_entries_deduped.cache_creation_input_tokens IS 'Safe to SUM. See view-level comment.';
+COMMENT ON COLUMN assistant_entries_deduped.cache_read_input_tokens     IS 'Safe to SUM. See view-level comment.';
+COMMENT ON COLUMN assistant_entries_deduped.cache_creation_5m           IS 'Safe to SUM. See view-level comment.';
+COMMENT ON COLUMN assistant_entries_deduped.cache_creation_1h           IS 'Safe to SUM. See view-level comment.';
+"#;
+
 pub const TOOL_USES_VIEW_DDL: &str = r#"
 CREATE OR REPLACE VIEW tool_uses AS
 SELECT
@@ -566,4 +612,29 @@ COMMENT ON COLUMN speculation_accept_entries.entry_id       IS '→ entries(entr
 
 -- ── soft references ───────────────────────────────────────────────────────
 COMMENT ON COLUMN assistant_entries.model IS '~ model_pricing(model) [soft: unknown models allowed]';
+
+-- ── billing-safety warnings on raw assistant_entries ─────────────────────
+-- These columns are duplicated across content blocks of the same response
+-- (all share the same message_id and usage figures). Summing them raw
+-- overcounts. Use assistant_entries_deduped for aggregation.
+COMMENT ON COLUMN assistant_entries.cost_usd IS
+'⚠ DO NOT SUM raw. Duplicated across content blocks sharing same message_id. Use assistant_entries_deduped for SUM(cost_usd). See view comment for details.';
+COMMENT ON COLUMN assistant_entries.input_tokens IS
+'⚠ DO NOT SUM raw. Duplicated across content blocks. Use assistant_entries_deduped.';
+COMMENT ON COLUMN assistant_entries.output_tokens IS
+'⚠ DO NOT SUM raw. Duplicated across content blocks. Use assistant_entries_deduped.';
+COMMENT ON COLUMN assistant_entries.cache_creation_input_tokens IS
+'⚠ DO NOT SUM raw. Duplicated across content blocks. Use assistant_entries_deduped.';
+COMMENT ON COLUMN assistant_entries.cache_read_input_tokens IS
+'⚠ DO NOT SUM raw. Duplicated across content blocks. Use assistant_entries_deduped.';
+COMMENT ON COLUMN assistant_entries.cache_creation_5m IS
+'⚠ DO NOT SUM raw. Duplicated across content blocks. Use assistant_entries_deduped.';
+COMMENT ON COLUMN assistant_entries.cache_creation_1h IS
+'⚠ DO NOT SUM raw. Duplicated across content blocks. Use assistant_entries_deduped.';
+COMMENT ON COLUMN assistant_entries.message_id IS
+'API-assigned billing ID. NOT unique within a file: one streaming response writes N entries (one per content block) sharing the same message_id. NULL = synthetic error message (is_api_error_message = true) that was never billed. Dedup on (file_path, message_id) for one-row-per-billing-event semantics.';
+COMMENT ON COLUMN assistant_entries.stop_reason IS
+'Set only on the final entry of a streaming response (the one that received message_delta). Used as the primary dedup tiebreaker — rows with stop_reason set are the authoritative billing record.';
+COMMENT ON COLUMN assistant_entries.is_api_error_message IS
+'TRUE = synthetic error surfaced to the user, not a real API response. Paired with message_id IS NULL and model = ''<synthetic>''. Never billed — exclude from cost aggregation.';
 "#;

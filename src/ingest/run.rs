@@ -26,7 +26,9 @@ use walkdir::WalkDir;
 use crate::ingest::cli::Cli;
 use crate::ingest::parse::{ParsedFile, parse_file};
 use crate::ingest::pricing::{self, PriceRow, build_lookup, merge, seed_rows};
-use crate::ingest::schema::{COMMENTS_DDL, INDEXES_DDL, PK_DDL, SCHEMA_DDL, TOOL_USES_VIEW_DDL};
+use crate::ingest::schema::{
+    COMMENTS_DDL, DEDUPED_VIEW_DDL, INDEXES_DDL, PK_DDL, SCHEMA_DDL, TOOL_USES_VIEW_DDL,
+};
 
 pub fn run(cli: Cli) -> ! {
     let started = Instant::now();
@@ -197,6 +199,8 @@ pub fn run(cli: Cli) -> ! {
 
     conn.execute_batch(TOOL_USES_VIEW_DDL)
         .unwrap_or_else(|e| die(format!("create view: {e}")));
+    conn.execute_batch(DEDUPED_VIEW_DDL)
+        .unwrap_or_else(|e| die(format!("create deduped view: {e}")));
     conn.execute_batch(PK_DDL)
         .unwrap_or_else(|e| die(format!("add primary keys: {e}")));
     conn.execute_batch(INDEXES_DDL)
