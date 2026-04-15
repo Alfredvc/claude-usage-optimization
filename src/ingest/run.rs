@@ -232,6 +232,7 @@ pub fn run(cli: Cli) -> ! {
     let s = elapsed.as_secs() % 60;
     eprintln!("Elapsed:      {h:02}:{m:02}:{s:02}");
 
+    drop(conn);
     std::process::exit(0);
 }
 
