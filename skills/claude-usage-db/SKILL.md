@@ -15,7 +15,7 @@ The schema has **one critical billing pitfall** and many subtle relational shape
 
 ## The #1 footgun: cost / token aggregation
 
-**Never `SUM` columns on raw `assistant_entries`.** A single streaming response writes one JSONL entry per content block (thinking + text + tool_use → 3 entries) and all share the same `message_id` and the same `usage` figures. Summing raw overcounts by ~2.16× on real data.
+**Never `SUM` columns on raw `assistant_entries`.** A single streaming response writes one JSONL entry per content block (thinking + text + tool_use → 3 entries) and all share the same `message_id` and the same `usage` figures. Summing raw overcounts by ~2× on real data.
 
 **Always use the `assistant_entries_deduped` view** for any aggregation of:
 
@@ -327,7 +327,7 @@ duckdb transcripts.duckdb "SELECT COUNT(*) FROM entries;"
 duckdb transcripts.duckdb < query.sql
 ```
 
-DuckDB CLI is at `/opt/homebrew/bin/duckdb` on this machine. If unavailable, the Python `duckdb` package or any DuckDB-compatible tool works — same SQL.
+If duckdb is unavailable, ask the user to install it with `curl https://install.duckdb.org | sh` or visit [https://duckdb.org/install/?platform=macos&environment=cli](https://duckdb.org/install/?platform=macos&environment=cli)
 
 ---
 
@@ -348,5 +348,3 @@ DuckDB CLI is at `/opt/homebrew/bin/duckdb` on this machine. If unavailable, the
 
 1. `SHOW TABLES;` and `SELECT view_name, comment FROM duckdb_views();`
 2. `SELECT column_name, data_type, comment FROM duckdb_columns() WHERE table_name = '<x>';`
-3. Read `docs/cost-attribution.md` in the repo for the full story on billing dedup.
-4. Read `FINDINGS.md` for the on-disk JSONL format that produced this DB.

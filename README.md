@@ -30,9 +30,14 @@ npx skills add alfredvc/claude-usage-optimization
 ```
 
 ## Quickstart
-
 ```bash
 cct ingest
+```
+
+Claude uses the duckdb cli, follow instructions to install [https://duckdb.org/install/?platform=macos&environment=cli](https://duckdb.org/install/?platform=macos&environment=cli) or
+
+```bash
+curl https://install.duckdb.org | sh
 ```
 
 Then simply ask claude to help you `/optimize-usage`

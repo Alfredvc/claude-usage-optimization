@@ -11,7 +11,7 @@ Investigating a user's Claude Code setup (via the transcripts DuckDB at the repo
 
 This is hard. Category rollups ("cost by model", "cost by project") are trivial to produce and trivially misleading. They tell you where money went but not why. The why lives in the user's workflow — which skills they run, what artifacts those skills produce, how big those artifacts are, how many subagents those artifacts propagate to, what sits in context for what fraction of the session. That chain is what you have to reconstruct.
 
-This skill is a methodology. It assumes you already know how to query the DB (see `claude-usage-db` in this same skills directory). If you have not read that skill, **read it first** — especially the billing-safety section. Every cost aggregation must use `assistant_entries_deduped` with `message_id IS NOT NULL`, or your numbers are ~2.16× too high and your recommendations will be proportionally wrong.
+This skill is a methodology. It assumes you already know how to query the DB (see `claude-usage-db` in this same skills directory). If you have not read that skill, **read it first** — especially the billing-safety section. Every cost aggregation must use `assistant_entries_deduped` with `message_id IS NOT NULL`, or your numbers are ~2× too high and your recommendations will be proportionally wrong.
 
 ---
 
@@ -76,7 +76,7 @@ For every anomaly from phase 2, trace it end-to-end:
 
 - **Where does it originate?** Which skill, slash command, subagent, or workflow produces it? Check `attachment_invoked_skills`, `tool_uses` with `name='Skill'`, CLAUDE.md rules, plan file locations (`**/plans/**`, `docs/plans/**`, etc.).
 - **What does it cost per occurrence?** Not just total — the marginal cost of one instance. A 30k-token artifact ingested fresh into an Opus subagent costs ~$0.56 in cache creation per spawn. Total cost = marginal × frequency; know both.
-- **Where does it get re-ingested?** Does it land in subagent contexts? In reviewer contexts? Does it get Read multiple times in the same session (cache-create each time — see `claude-usage-db` on `attachment_entries`)?
+- **Where does it get re-ingested?** Does it land in subagent contexts? In reviewer contexts? Does it get Read multiple times in the same session (each Read creates a new attachment entry and a fresh cache-create charge)?
 - **What does it substitute for?** Would a pointer (file path + line numbers) do the same job at 1/10th the size? Would a smaller model handle it? Could the work be batched?
 
 Write a one-paragraph "trace" per anomaly. The trace names the origin, the per-occurrence cost, the propagation, and the cheapest plausible alternative.
@@ -222,7 +222,7 @@ SELECT CASE WHEN s.session_id IS NOT NULL THEN 'with' ELSE 'without' END AS grp,
             ELSE '201+' END AS bucket,
        ROUND(AVG(t.cost_usd)*100, 2) AS avg_cents
 FROM turns t LEFT JOIN sess_with_skill s USING(session_id)
-WHERE t.model = 'claude-opus-4-6'
+WHERE t.model LIKE 'claude-opus%'  -- adjust to your dominant model
 GROUP BY 1, 2
 ORDER BY 2, 1;
 ```
@@ -242,8 +242,6 @@ Same template applies to any artifact (design docs, research outputs, long CLAUD
 
 ## A worked failure, for calibration
 
-In a real investigation on this very DB, the agent (me, in an earlier turn) did cost-by-model, cost-by-project, cost-by-tool, and declared the root cause was "Opus on subagents, 49% of spend." That was a real finding — but it was not the biggest one. The user then asked about plan files; a 10-minute hunt surfaced 175 plan files averaging 7k tokens, some reaching 30k tokens, re-ingested into 412 subagent sessions covering 61% of spend, with 2,927 wasted in-session re-reads. That was the bigger lever. The agent had not looked, because the agent rolled up by category instead of hunting outliers in artifact size.
+In one real investigation, an agent did cost-by-model, cost-by-project, cost-by-tool, and declared the root cause was "Opus on subagents, 49% of spend." That was a real finding — but it was not the biggest one. The user then asked about plan files; a 10-minute hunt surfaced 175 plan files averaging 7k tokens, some reaching 30k tokens, re-ingested into 412 subagent sessions covering 61% of spend, with 2,927 wasted in-session re-reads. That was the bigger lever. The agent had not looked, because the agent rolled up by category instead of hunting outliers in artifact size.
 
-The pattern generalizes. The biggest cost drivers in a Claude Code setup are almost always **propagating artifacts** — plans, research reports, rules, large tool outputs — because they pay the cache-creation tax on every subagent spawn and the cache-read tax on every turn they sit in context. Model choice matters, but artifact choice compounds faster.
-
-When in doubt, look for what the user's workflow produces, how big it is, and where it gets re-served.
+The pattern generalizes. The biggest cost drivers in a Claude Code setup are not necessarily obvious. Dig deeper, find the root cause. Involve the user if necessary.
