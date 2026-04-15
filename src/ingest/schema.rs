@@ -51,8 +51,7 @@ CREATE TABLE IF NOT EXISTS entries (
     prompt_id               TEXT,
     is_meta                 BOOLEAN,
     forked_from_uuid        TEXT,
-    forked_from_session_id  TEXT,
-    raw_json                TEXT
+    forked_from_session_id  TEXT
 );
 
 CREATE TABLE IF NOT EXISTS model_pricing (

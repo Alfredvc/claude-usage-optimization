@@ -238,7 +238,6 @@ pub fn parse_file(path: &Path, pricing: &HashMap<String, PriceRow>) -> ParsedFil
             &entry,
             line_no as i64,
             &file_path,
-            trimmed,
             pricing,
             &mut session_id,
             &mut first_ts,
@@ -274,7 +273,6 @@ fn build_rows(
     entry: &Entry,
     line_no: i64,
     file_path: &str,
-    raw_json: &str,
     pricing: &HashMap<String, PriceRow>,
     session_id_out: &mut Option<String>,
     first_ts: &mut Option<String>,
@@ -286,9 +284,8 @@ fn build_rows(
     //   uuid, parent_uuid, logical_parent_uuid, is_sidechain,
     //   session_id, timestamp, user_type, entrypoint, cwd, version,
     //   git_branch, slug, agent_id, team_name, agent_name, agent_color,
-    //   prompt_id, is_meta, forked_from_uuid, forked_from_session_id,
-    //   raw_json
-    let mut e_row: Vec<Value> = Vec::with_capacity(26);
+    //   prompt_id, is_meta, forked_from_uuid, forked_from_session_id
+    let mut e_row: Vec<Value> = Vec::with_capacity(25);
     e_row.push(Value::Null); // entry_id placeholder
     e_row.push(s_str(file_path));
     e_row.push(Value::Number(serde_json::Number::from(line_no)));
@@ -341,8 +338,6 @@ fn build_rows(
             }
         }
     }
-
-    e_row.push(s_str(raw_json));
 
     // Variant + child rows
     let (variant, children) = build_variant(entry, pricing, unknown_models)?;

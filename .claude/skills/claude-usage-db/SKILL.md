@@ -5,7 +5,9 @@ description: Query and analyze the project's DuckDB database of ingested Claude 
 
 # Querying the Claude transcripts DuckDB
 
-This database (`transcripts.duckdb` at the repo root, ~4 GB) is produced by the Rust `ingest` binary parsing Claude Code JSONL transcripts from `~/.claude/projects/`. It captures every assistant turn, user turn, tool call, hook event, and metadata record across all sessions.
+This database (`transcripts.duckdb` at the repo root, ~2 GB) is produced by the Rust `ingest` binary parsing Claude Code JSONL transcripts from `~/.claude/projects/`. It captures every assistant turn, user turn, tool call, hook event, and metadata record across all sessions.
+
+The raw JSONL line is **not** stored in the DB — every entry keeps `file_path` + `line_no` so the original line can be pulled from disk on demand. See "Accessing the original JSONL line" below.
 
 The schema has **one critical billing pitfall** and many subtle relational shapes. Read this skill in full before running queries.
 
@@ -175,11 +177,63 @@ Polymorphic / variable-shape data is stored as DuckDB `JSON`. Query with `json_e
 | `assistant_entries.iterations` | array of `{input_tokens, output_tokens, cache_*, type}` — API beta decomposition |
 | `assistant_content_blocks.tool_input` | per-tool input object (varies by tool) |
 | `user_content_blocks.tool_use_result` | tool result payload |
-| `entries.raw_json` | full original JSONL line (escape hatch when nothing else fits) |
 
 **`iterations` is NOT for billing.** It's a decomposition — top-level `usage` is always the authoritative total. When only one iteration, `iterations[0]` == top-level. The Advisor server-tool (beta) triggers multi-iteration responses where top-level is the aggregate. Never `SUM` iteration elements as a substitute for top-level tokens.
 
 If you need iteration-level data, prefer the flattened child table `assistant_usage_iterations` over the JSON column.
+
+---
+
+## Accessing the original JSONL line
+
+The raw JSONL is intentionally **not** stored in the DB (would roughly double its size and every field is already parsed into typed columns). When you genuinely need the untouched line — debugging a parse failure, inspecting a field the ingest dropped, reproducing an edge case — reconstruct it from `entries.file_path` + `entries.line_no` (1-indexed).
+
+```sql
+-- Locate the source line for an entry
+SELECT file_path, line_no
+FROM entries
+WHERE entry_id = <id>;
+
+-- Or for a uuid
+SELECT file_path, line_no
+FROM entries
+WHERE uuid = '<uuid>';
+```
+
+Then extract the line from disk:
+
+```bash
+# Exact line, pretty-printed
+awk "NR==<line_no>" "<file_path>" | jq '.'
+
+# Fields only
+awk "NR==<line_no>" "<file_path>" | jq '.message.content'
+```
+
+Bulk extract for many entries (e.g. all entries of a session):
+
+```sql
+-- Dump (file_path, line_no) pairs to a CSV, then iterate in shell
+COPY (
+  SELECT file_path, line_no
+  FROM entries
+  WHERE session_id = '<uuid>'
+  ORDER BY line_no
+) TO '/tmp/lines.csv' (HEADER, DELIMITER ',');
+```
+
+```bash
+tail -n +2 /tmp/lines.csv | while IFS=, read -r fp ln; do
+  awk "NR==$ln" "${fp//\"/}"
+done | jq -c '.'
+```
+
+Notes:
+
+- `transcripts.file_path` is absolute. It points under `~/.claude/projects/<slug>/` for main sessions and `<session>/subagents/agent-<id>.jsonl` for subagent runs.
+- `line_no` is 1-indexed (matches `sed -n 'Np'` and `awk 'NR==N'`).
+- Source files are append-only during a live session but never mutated after it ends, so line numbers stay stable. If ingest was run, then a session continued, re-ingest to pick up new lines.
+- If the file is missing, the session may have been cleaned up. Nothing in the DB will recover it — raw lines are only on disk.
 
 ---
 
