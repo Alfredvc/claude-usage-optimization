@@ -1401,8 +1401,8 @@ async fn api_dashboard_file_hotspots(
                    AND CAST(e.timestamp AS TIMESTAMP) < CAST(? AS TIMESTAMP) \
                    AND json_extract_string(acb.tool_input, '$.file_path') IS NOT NULL \
                    AND json_extract_string(acb.tool_input, '$.file_path') != '' \
-                 GROUP BY file_path \
-                 ORDER BY distinct_sessions DESC \
+                 GROUP BY 1 \
+                 ORDER BY 2 DESC \
                  LIMIT 30",
             )
             .map_err(|e| e.to_string())?;
