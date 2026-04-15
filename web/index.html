@@ -65,6 +65,13 @@
     /* ── Timeline ── */
     .timeline { flex: 1; overflow-y: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 6px; }
 
+    /* ── Chart click highlight ── */
+    @keyframes highlight-flash {
+      0%, 100% { box-shadow: none; }
+      30% { box-shadow: 0 0 0 2px #58a6ff, 0 0 12px rgba(88, 166, 255, 0.4); }
+    }
+    .highlight-flash { animation: highlight-flash 1.5s ease-in-out 10; }
+
     /* ── Cards ── */
     .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; }
     .card-user   { border-left: 3px solid var(--accent); }
@@ -202,7 +209,7 @@
 <div id="root"></div>
 <script type="text/babel">
 const { useState, useEffect, useCallback, useMemo, useRef } = React;
-const { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } = window.Recharts || {};
+const { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, AreaChart, Area } = window.Recharts || {};
 
 // ── Pricing (USD / million tokens) — used for cost bar color breakdown only ──
 const PRICES = {
@@ -339,7 +346,7 @@ function UserCard({ item }) {
 }
 
 // ── ApiCard ────────────────────────────────────────────────────────────────
-function ApiCard({ item, maxCost, sessionId }) {
+function ApiCard({ item, maxCost, sessionId, id }) {
   const [expanded, setExpanded] = useState(false);
   const usage = useMemo(() => getUsage(item), [item]);
   const shortModelName = item.model ? item.model.replace('claude-', '').replace(/-\d{8}$/, '') : '';
@@ -347,7 +354,7 @@ function ApiCard({ item, maxCost, sessionId }) {
   const texts = item.texts || [];
   const hasDetails = texts.length > 0 || toolUses.length > 0;
   return (
-    <div className="card card-api" style={hasDetails ? { cursor: 'pointer' } : {}} onClick={hasDetails ? () => setExpanded(e => !e) : undefined}>
+    <div id={id} className="card card-api" style={hasDetails ? { cursor: 'pointer' } : {}} onClick={hasDetails ? () => setExpanded(e => !e) : undefined}>
       <div className="api-header">
         <span className="api-num">API #{item.num}</span>
         <span className="api-cost">{fmtCost(item.cost_usd)}</span>
@@ -445,7 +452,7 @@ function SubagentCard({ item, sessionId }) {
   }, [open, timeline, sessionId, item.agent_id]);
 
   const apiItems = useMemo(() => (timeline || []).filter(i => i.kind === 'assistant'), [timeline]);
-  const maxCost  = useMemo(() => Math.max(1e-9, ...apiItems.map(i => i.cost_usd || 0)), [apiItems]);
+  const maxCost  = useMemo(() => Math.max(1e-9, apiItems.reduce((s, i) => s + (i.cost_usd || 0), 0)), [apiItems]);
   const totals   = useMemo(() => {
     const zero = { input: 0, cr: 0, cw: 0, out: 0, total: 0 };
     return apiItems.reduce((a, i) => {
@@ -480,6 +487,7 @@ function SubagentCard({ item, sessionId }) {
 // ── CostChart ──────────────────────────────────────────────────────────────
 function CostChart({ apiItems }) {
   if (apiItems.length < 2) return null;
+  if (!AreaChart) return null;
 
   const points = useMemo(() => {
     let cum = 0;
@@ -490,28 +498,47 @@ function CostChart({ apiItems }) {
       const activity = toolUses.length > 0
         ? toolUses.map(tu => tu.name).join('+')
         : item.has_thinking ? 'Thinking' : 'Text';
-      return { cum, delta, activity, num: i + 1, item };
+      return { cum, delta, activity, num: i + 1, timelineIdx: item.timelineIdx,
+               hasTool: toolUses.length > 0, hasThinking: item.has_thinking };
     });
   }, [apiItems]);
 
   const maxCum = points[points.length - 1].cum;
-  const n = points.length;
-  const PAD = { t: 4, r: 4, b: 4, l: 4 };
-  const W = 1000, H = 50;
-  const iW = W - PAD.l - PAD.r;
-  const iH = H - PAD.t - PAD.b;
 
-  const x = i => PAD.l + (n > 1 ? (i / (n - 1)) * iW : iW / 2);
-  const y = v => PAD.t + (maxCum > 0 ? (1 - v / maxCum) : 1) * iH;
+  const scrollToItem = useCallback((timelineIdx) => {
+    const el = document.getElementById(`api-item-${timelineIdx}`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.classList.remove('highlight-flash');
+    void el.offsetWidth; // force reflow so re-adding class restarts animation
+    el.classList.add('highlight-flash');
+    setTimeout(() => el.classList.remove('highlight-flash'), 15000);
+  }, []);
 
-  const linePts = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(p.cum).toFixed(1)}`).join('');
-  const areaPts = `${linePts}L${x(n-1).toFixed(1)},${(PAD.t+iH).toFixed(1)}L${x(0).toFixed(1)},${(PAD.t+iH).toFixed(1)}Z`;
+  const CustomDot = useCallback((props) => {
+    const { cx, cy, payload } = props;
+    if (cx == null || cy == null) return null;
+    const color = payload.hasTool ? '#7ee787' : payload.hasThinking ? '#d2a8ff' : '#58a6ff';
+    return (
+      <circle
+        cx={cx} cy={cy} r={4}
+        fill={color}
+        style={{ cursor: 'pointer' }}
+        onClick={() => scrollToItem(payload.timelineIdx)}
+      />
+    );
+  }, [scrollToItem]);
 
-  const dotColor = p => {
-    const toolUses = p.item.tool_uses || [];
-    if (toolUses.length > 0) return '#7ee787';
-    if (p.item.has_thinking) return '#d2a8ff';
-    return '#58a6ff';
+  const CustomTooltip = ({ active, payload }) => {
+    if (!active || !payload?.length) return null;
+    const p = payload[0].payload;
+    return (
+      <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 4, padding: '4px 8px', fontSize: 11, lineHeight: 1.5 }}>
+        <div>API #{p.num}: <strong>+{fmtCost(p.delta)}</strong> → <strong>{fmtCost(p.cum)}</strong></div>
+        <div style={{ color: 'var(--muted)' }}>{p.activity}</div>
+        <div style={{ color: 'var(--muted)', fontSize: 10 }}>click to scroll</div>
+      </div>
+    );
   };
 
   return (
@@ -524,15 +551,29 @@ function CostChart({ apiItems }) {
           <span><span style={{ color: '#58a6ff' }}>●</span> text</span>
         </span>
       </div>
-      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 55, display: 'block' }} preserveAspectRatio="none">
-        <path d={areaPts} fill="var(--accent)" fillOpacity={0.07} />
-        <path d={linePts} fill="none" stroke="var(--accent)" strokeWidth={1.5} />
-        {points.map((p, i) => (
-          <circle key={i} cx={x(i)} cy={y(p.cum)} r={3.5} fill={dotColor(p)}>
-            <title>{`API #${p.num}: +${fmtCost(p.delta)} → ${fmtCost(p.cum)} | ${p.activity}`}</title>
-          </circle>
-        ))}
-      </svg>
+      <ResponsiveContainer width="100%" height={55}>
+        <AreaChart data={points} margin={{ top: 4, right: 4, left: 4, bottom: 4 }}>
+          <defs>
+            <linearGradient id="costGradient" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="5%" stopColor="var(--accent)" stopOpacity={0.15} />
+              <stop offset="95%" stopColor="var(--accent)" stopOpacity={0} />
+            </linearGradient>
+          </defs>
+          <XAxis dataKey="num" hide />
+          <YAxis hide domain={[0, maxCum * 1.05]} />
+          <Tooltip content={<CustomTooltip />} />
+          <Area
+            type="monotone"
+            dataKey="cum"
+            stroke="var(--accent)"
+            strokeWidth={1.5}
+            fill="url(#costGradient)"
+            dot={<CustomDot />}
+            activeDot={{ r: 5, style: { cursor: 'pointer' }, onClick: (e, p) => scrollToItem(p.payload.timelineIdx) }}
+            isAnimationActive={false}
+          />
+        </AreaChart>
+      </ResponsiveContainer>
     </div>
   );
 }
@@ -630,7 +671,7 @@ function SessionTotals({ timeline }) {
 // ── renderItem ─────────────────────────────────────────────────────────────
 function renderItem(item, idx, maxCost, sessionId) {
   if (item.kind === 'user')      return <UserCard key={idx} item={item} />;
-  if (item.kind === 'assistant') return <ApiCard  key={idx} item={item} maxCost={maxCost} sessionId={sessionId} />;
+  if (item.kind === 'assistant') return <ApiCard  key={idx} id={`api-item-${idx}`} item={item} maxCost={maxCost} sessionId={sessionId} />;
   return null;
 }
 
@@ -1211,8 +1252,10 @@ function TranscriptView({ selectedProject, initialSessionId, initialSort }) {
 
   useEffect(() => { if (sessionId) load(); }, [sessionId, selectedProject]);
 
-  const apiItems = useMemo(() => (timeline || []).filter(i => i.kind === 'assistant'), [timeline]);
-  const maxCost  = useMemo(() => Math.max(1e-9, ...apiItems.map(i => i.cost_usd || 0)), [apiItems]);
+  const apiItems = useMemo(() =>
+    (timeline || []).flatMap((item, idx) => item.kind === 'assistant' ? [{ ...item, timelineIdx: idx }] : []),
+    [timeline]);
+  const maxCost  = useMemo(() => Math.max(1e-9, apiItems.reduce((s, i) => s + (i.cost_usd || 0), 0)), [apiItems]);
 
   if (!selectedProject) {
     return (
@@ -1267,7 +1310,7 @@ function TranscriptView({ selectedProject, initialSessionId, initialSort }) {
           </span>
         ))}
         <span style={{ marginLeft: 10, color: 'var(--muted)', fontStyle: 'italic' }}>
-          tok bar: 100% = 1M tokens · cost bar: 100% = max call cost in session · cost from DB
+          tok bar: 100% = 1M tokens · cost bar: 100% = total session cost · cost from DB
         </span>
       </div>
     </>
