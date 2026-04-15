@@ -1,0 +1,23 @@
+[package]
+name = "transcript_types"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+walkdir = "2"
+rayon = "1"
+clap = { version = "4", features = ["derive"] }
+duckdb = { version = "1", features = ["bundled"] }
+chrono = { version = "0.4", features = ["serde"] }
+crossbeam-channel = "0.5"
+toml = "0.8"
+
+[[bin]]
+name = "ingest"
+path = "src/bin/ingest.rs"
+
+[[bin]]
+name = "check_all"
+path = "src/bin/check_all.rs"
