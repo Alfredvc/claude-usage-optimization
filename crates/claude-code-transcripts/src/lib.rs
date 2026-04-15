@@ -1,9 +1,4 @@
-//! Typed parser for Claude Code transcript JSONL files.
-//!
-//! Claude Code writes one JSON object per line under `~/.claude/projects/<slug>/<session>.jsonl`.
-//! This crate exposes strongly-typed [`types::Entry`] variants covering every line the
-//! current client produces, plus a [`check_transcript`] round-trip validator useful for
-//! pinning the schema against future Claude Code releases.
+#![doc = include_str!("../README.md")]
 
 pub mod types;
 
