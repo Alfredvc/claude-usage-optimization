@@ -185,7 +185,10 @@ pub struct UserEntry {
     pub tool_use_result: Option<Value>,
 
     /// UUID of the assistant message that requested this tool result.
-    #[serde(rename = "sourceToolAssistantUUID", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "sourceToolAssistantUUID",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub source_tool_assistant_uuid: Option<String>,
 
     /// ID of the tool use block that triggered this user message.
@@ -201,7 +204,10 @@ pub struct UserEntry {
     #[serde(rename = "isCompactSummary", skip_serializing_if = "Option::is_none")]
     pub is_compact_summary: Option<bool>,
 
-    #[serde(rename = "isVisibleInTranscriptOnly", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "isVisibleInTranscriptOnly",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub is_visible_in_transcript_only: Option<bool>,
 
     #[serde(rename = "imagePasteIds", skip_serializing_if = "Option::is_none")]
@@ -259,32 +265,19 @@ pub enum UserContentBlock {
     },
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ImageSource {
-    Base64 {
-        media_type: String,
-        data: String,
-    },
-    Url {
-        url: String,
-    },
+    Base64 { media_type: String, data: String },
+    Url { url: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DocumentSource {
-    Base64 {
-        media_type: String,
-        data: String,
-    },
-    Text {
-        data: String,
-    },
-    Url {
-        url: String,
-    },
+    Base64 { media_type: String, data: String },
+    Text { data: String },
+    Url { url: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -533,7 +526,10 @@ pub struct SystemEntry {
     #[serde(rename = "hookErrors", skip_serializing_if = "Option::is_none")]
     pub hook_errors: Option<Vec<Value>>,
 
-    #[serde(rename = "preventedContinuation", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "preventedContinuation",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub prevented_continuation: Option<bool>,
 
     #[serde(rename = "stopReason", skip_serializing_if = "Option::is_none")]
@@ -610,7 +606,10 @@ pub struct CompactMetadata {
     pub duration_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preserved_segment: Option<PreservedSegment>,
-    #[serde(rename = "preCompactDiscoveredTools", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "preCompactDiscoveredTools",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub pre_compact_discovered_tools: Option<Vec<String>>,
 }
 
@@ -822,7 +821,8 @@ pub struct FileAttachmentContent {
 #[serde(rename_all = "camelCase")]
 pub struct FileData {
     pub file_path: String,
-    pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
     #[serde(rename = "numLines", skip_serializing_if = "Option::is_none")]
     pub num_lines: Option<u64>,
     #[serde(rename = "startLine", skip_serializing_if = "Option::is_none")]

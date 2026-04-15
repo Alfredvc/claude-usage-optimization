@@ -10,11 +10,11 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
-use crate::pricing::{PriceRow, compute_cost};
+use crate::pricing::{compute_cost, PriceRow};
 use claude_code_transcripts::types::{
-    AssistantContentBlock, AttachmentData, CacheCreation, Entry, ImageSource, DocumentSource,
+    AssistantContentBlock, AttachmentData, CacheCreation, DocumentSource, Entry, ImageSource,
     UserContent, UserContentBlock,
 };
 
@@ -653,11 +653,7 @@ fn build_variant(
         Entry::SpeculationAccept(x) => Ok((
             Some((
                 "speculation_accept_entries",
-                vec![
-                    Value::Null,
-                    s_str(&x.timestamp),
-                    u(x.time_saved_ms),
-                ],
+                vec![Value::Null, s_str(&x.timestamp), u(x.time_saved_ms)],
             )),
             vec![],
         )),
@@ -665,7 +661,12 @@ fn build_variant(
     }
 }
 
-fn build_user(ue: &claude_code_transcripts::types::UserEntry) -> (Option<(&'static str, Vec<Value>)>, Vec<(&'static str, Vec<Vec<Value>>)>) {
+fn build_user(
+    ue: &claude_code_transcripts::types::UserEntry,
+) -> (
+    Option<(&'static str, Vec<Value>)>,
+    Vec<(&'static str, Vec<Vec<Value>>)>,
+) {
     let role = serde_json::to_value(&ue.message.role)
         .ok()
         .and_then(|v| v.as_str().map(|s| s.to_string()))
@@ -678,11 +679,11 @@ fn build_user(ue: &claude_code_transcripts::types::UserEntry) -> (Option<(&'stat
         };
 
     let row = vec![
-        Value::Null,                                    // entry_id
-        s_str(&role),                                   // message_role
-        s(content_text),                                // message_content_text
-        b(has_blocks),                                  // message_has_blocks
-        ojson(ue.tool_use_result.as_ref()),             // tool_use_result
+        Value::Null,                        // entry_id
+        s_str(&role),                       // message_role
+        s(content_text),                    // message_content_text
+        b(has_blocks),                      // message_has_blocks
+        ojson(ue.tool_use_result.as_ref()), // tool_use_result
         s(ue.source_tool_assistant_uuid.clone()),
         s(ue.source_tool_use_id.clone()),
         s(ue.permission_mode.clone()),
@@ -772,7 +773,10 @@ fn build_assistant(
     ae: &claude_code_transcripts::types::AssistantEntry,
     pricing: &HashMap<String, PriceRow>,
     unknown_models: &mut Vec<String>,
-) -> (Option<(&'static str, Vec<Value>)>, Vec<(&'static str, Vec<Vec<Value>>)>) {
+) -> (
+    Option<(&'static str, Vec<Value>)>,
+    Vec<(&'static str, Vec<Vec<Value>>)>,
+) {
     let m = &ae.message;
     let role = serde_json::to_value(&m.role)
         .ok()
@@ -810,32 +814,32 @@ fn build_assistant(
         .count();
 
     let row = vec![
-        Value::Null,                                          // entry_id
-        s_str(&m.id),                                         // message_id
-        s_str(&role),                                         // role
-        s_str(&m.model),                                      // model
-        opt_opt_json(&m.container),                           // container
-        s(m.stop_reason.clone()),                             // stop_reason
-        s(m.stop_sequence.clone()),                           // stop_sequence
-        opt_opt_json(&m.stop_details),                        // stop_details
-        opt_opt_json(&m.context_management),                  // context_management
-        s(ae.request_id.clone()),                             // request_id
-        ob(ae.is_api_error_message),                          // is_api_error_message
-        s(ae.error.clone()),                                  // error
-        u(tool_use_count as u64),                             // tool_use_count
-        of(cost),                                             // cost_usd
-        u(usage.input_tokens),                                // input_tokens
-        u(usage.output_tokens),                               // output_tokens
-        ou(usage.cache_creation_input_tokens),                // cache_creation_input_tokens
-        ou(usage.cache_read_input_tokens),                    // cache_read_input_tokens
-        ou(cache_5m),                                         // cache_creation_5m
-        ou(cache_1h),                                         // cache_creation_1h
-        ou(web_search),                                       // web_search_requests
-        ou(web_fetch),                                        // web_fetch_requests
-        opt_opt_json(&usage.service_tier),                    // service_tier
-        opt_opt_json(&usage.inference_geo),                   // inference_geo
-        opt_opt_json(&usage.iterations),                      // iterations
-        opt_opt_json(&usage.speed),                           // speed
+        Value::Null,                           // entry_id
+        s_str(&m.id),                          // message_id
+        s_str(&role),                          // role
+        s_str(&m.model),                       // model
+        opt_opt_json(&m.container),            // container
+        s(m.stop_reason.clone()),              // stop_reason
+        s(m.stop_sequence.clone()),            // stop_sequence
+        opt_opt_json(&m.stop_details),         // stop_details
+        opt_opt_json(&m.context_management),   // context_management
+        s(ae.request_id.clone()),              // request_id
+        ob(ae.is_api_error_message),           // is_api_error_message
+        s(ae.error.clone()),                   // error
+        u(tool_use_count as u64),              // tool_use_count
+        of(cost),                              // cost_usd
+        u(usage.input_tokens),                 // input_tokens
+        u(usage.output_tokens),                // output_tokens
+        ou(usage.cache_creation_input_tokens), // cache_creation_input_tokens
+        ou(usage.cache_read_input_tokens),     // cache_read_input_tokens
+        ou(cache_5m),                          // cache_creation_5m
+        ou(cache_1h),                          // cache_creation_1h
+        ou(web_search),                        // web_search_requests
+        ou(web_fetch),                         // web_fetch_requests
+        opt_opt_json(&usage.service_tier),     // service_tier
+        opt_opt_json(&usage.inference_geo),    // inference_geo
+        opt_opt_json(&usage.iterations),       // iterations
+        opt_opt_json(&usage.speed),            // speed
     ];
 
     let mut block_rows: Vec<Vec<Value>> = Vec::new();
@@ -855,7 +859,10 @@ fn build_assistant(
                 Value::Null,
                 Value::Null,
             ],
-            AssistantContentBlock::Thinking { thinking, signature } => vec![
+            AssistantContentBlock::Thinking {
+                thinking,
+                signature,
+            } => vec![
                 Value::Null,
                 u(pos),
                 s_str("thinking"),
@@ -881,7 +888,12 @@ fn build_assistant(
                 Value::Null,
                 Value::Null,
             ],
-            AssistantContentBlock::ToolUse { id, name, input, caller } => vec![
+            AssistantContentBlock::ToolUse {
+                id,
+                name,
+                input,
+                caller,
+            } => vec![
                 Value::Null,
                 u(pos),
                 s_str("tool_use"),
@@ -904,16 +916,17 @@ fn build_assistant(
         for (idx, iter) in arr.iter().enumerate() {
             let pos = idx as u64;
             let it = iter.as_object();
-            let get_u = |k: &str| -> Option<u64> {
-                it.and_then(|o| o.get(k)).and_then(|v| v.as_u64())
-            };
+            let get_u =
+                |k: &str| -> Option<u64> { it.and_then(|o| o.get(k)).and_then(|v| v.as_u64()) };
             let cc = it.and_then(|o| o.get("cache_creation"));
             let cc5 = cc.and_then(|c| c.get("ephemeral_5m_input_tokens").and_then(|v| v.as_u64()));
             let cc1 = cc.and_then(|c| c.get("ephemeral_1h_input_tokens").and_then(|v| v.as_u64()));
             iter_rows.push(vec![
                 Value::Null,
                 u(pos),
-                s(it.and_then(|o| o.get("type")).and_then(|v| v.as_str()).map(|s| s.to_string())),
+                s(it.and_then(|o| o.get("type"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())),
                 ou(get_u("input_tokens")),
                 ou(get_u("output_tokens")),
                 ou(get_u("cache_read_input_tokens")),
@@ -931,11 +944,19 @@ fn build_assistant(
     if !iter_rows.is_empty() {
         children.push(("assistant_usage_iterations", iter_rows));
     }
-    let _ = CacheCreation { ephemeral_1h_input_tokens: None, ephemeral_5m_input_tokens: None }; // keep import
+    let _ = CacheCreation {
+        ephemeral_1h_input_tokens: None,
+        ephemeral_5m_input_tokens: None,
+    }; // keep import
     (Some(("assistant_entries", row)), children)
 }
 
-fn build_system(se: &claude_code_transcripts::types::SystemEntry) -> (Option<(&'static str, Vec<Value>)>, Vec<(&'static str, Vec<Vec<Value>>)>) {
+fn build_system(
+    se: &claude_code_transcripts::types::SystemEntry,
+) -> (
+    Option<(&'static str, Vec<Value>)>,
+    Vec<(&'static str, Vec<Vec<Value>>)>,
+) {
     let subtype_str = serde_json::to_value(&se.subtype)
         .ok()
         .and_then(|v| v.as_str().map(|s| s.to_string()))
@@ -943,7 +964,7 @@ fn build_system(se: &claude_code_transcripts::types::SystemEntry) -> (Option<(&'
 
     let cm = se.compact_metadata.as_ref();
     let row = vec![
-        Value::Null,                                  // entry_id
+        Value::Null, // entry_id
         s_str(&subtype_str),
         s(se.content.clone()),
         s(se.level.clone()),
@@ -999,7 +1020,12 @@ fn build_system(se: &claude_code_transcripts::types::SystemEntry) -> (Option<(&'
     (Some(("system_entries", row)), children)
 }
 
-fn build_attachment(ae: &claude_code_transcripts::types::AttachmentEntry) -> (Option<(&'static str, Vec<Value>)>, Vec<(&'static str, Vec<Vec<Value>>)>) {
+fn build_attachment(
+    ae: &claude_code_transcripts::types::AttachmentEntry,
+) -> (
+    Option<(&'static str, Vec<Value>)>,
+    Vec<(&'static str, Vec<Vec<Value>>)>,
+) {
     use AttachmentData::*;
     // Initialise wide row as all NULL then fill the relevant slots.
     let mut row: Vec<Value> = vec![Value::Null; 43];
@@ -1049,7 +1075,8 @@ fn build_attachment(ae: &claude_code_transcripts::types::AttachmentEntry) -> (Op
     // 39 mcp_removed_names, 40 ultrathink_level, 41 queued_command_prompt,
     // 42 queued_command_mode
 
-    let fill_hook = |row: &mut Vec<Value>, h: &claude_code_transcripts::types::HookResultAttachment| {
+    let fill_hook = |row: &mut Vec<Value>,
+                     h: &claude_code_transcripts::types::HookResultAttachment| {
         row[2] = s(h.hook_name.clone());
         row[3] = s(h.tool_use_id.clone());
         row[4] = s(h.hook_event.clone());
@@ -1068,22 +1095,36 @@ fn build_attachment(ae: &claude_code_transcripts::types::AttachmentEntry) -> (Op
         HookSuccess(h) | HookNonBlockingError(h) | HookBlockingError(h) | HookCancelled(h) => {
             fill_hook(&mut row, h);
         }
-        HookAdditionalContext { content, hook_name, tool_use_id, hook_event } => {
+        HookAdditionalContext {
+            content,
+            hook_name,
+            tool_use_id,
+            hook_event,
+        } => {
             row[2] = s(hook_name.clone());
             row[3] = s(tool_use_id.clone());
             row[4] = s(hook_event.clone());
             // content (list of strings) → store joined into hook_content for searchability
             row[5] = s_str(&content.join("\n"));
         }
-        HookPermissionDecision { decision, hook_name, tool_use_id, hook_event } => {
+        HookPermissionDecision {
+            decision,
+            hook_name,
+            tool_use_id,
+            hook_event,
+        } => {
             row[2] = s(hook_name.clone());
             row[3] = s(tool_use_id.clone());
             row[4] = s(hook_event.clone());
             row[11] = s_str(decision);
         }
-        File { filename, content, display_path } => {
+        File {
+            filename,
+            content,
+            display_path,
+        } => {
             row[12] = s_str(filename);
-            row[13] = s_str(&content.file.content);
+            row[13] = s(content.file.content.clone());
             row[14] = ojson_serializable(Some(content));
             row[15] = s(display_path.clone());
         }
@@ -1091,34 +1132,57 @@ fn build_attachment(ae: &claude_code_transcripts::types::AttachmentEntry) -> (Op
             row[12] = s_str(filename);
             row[13] = s_str(snippet);
         }
-        Directory { path, content, display_path } => {
+        Directory {
+            path,
+            content,
+            display_path,
+        } => {
             row[16] = s_str(path);
             row[17] = s_str(content);
             row[15] = s_str(display_path);
         }
-        CompactFileReference { filename, display_path } => {
+        CompactFileReference {
+            filename,
+            display_path,
+        } => {
             row[12] = s_str(filename);
             row[15] = s_str(display_path);
         }
         CommandPermissions { allowed_tools } => {
             row[18] = json_str(&json!(allowed_tools));
         }
-        PlanMode { reminder_type, is_sub_agent, plan_file_path, plan_exists } => {
+        PlanMode {
+            reminder_type,
+            is_sub_agent,
+            plan_file_path,
+            plan_exists,
+        } => {
             row[19] = s_str(reminder_type);
             row[20] = b(*is_sub_agent);
             row[21] = s(plan_file_path.clone());
             row[22] = b(*plan_exists);
         }
-        PlanModeExit { plan_file_path, plan_exists } => {
+        PlanModeExit {
+            plan_file_path,
+            plan_exists,
+        } => {
             row[21] = s(plan_file_path.clone());
             row[22] = b(*plan_exists);
         }
-        SkillListing { content, is_initial, skill_count } => {
+        SkillListing {
+            content,
+            is_initial,
+            skill_count,
+        } => {
             row[23] = s_str(content);
             row[24] = ob(*is_initial);
             row[25] = ou32(*skill_count);
         }
-        DynamicSkill { skill_dir, skill_names, display_path } => {
+        DynamicSkill {
+            skill_dir,
+            skill_names,
+            display_path,
+        } => {
             row[26] = s_str(skill_dir);
             row[27] = json_str(&json!(skill_names));
             row[15] = s_str(display_path);
@@ -1134,7 +1198,10 @@ fn build_attachment(ae: &claude_code_transcripts::types::AttachmentEntry) -> (Op
                 ]);
             }
         }
-        TaskReminder { content, item_count } => {
+        TaskReminder {
+            content,
+            item_count,
+        } => {
             row[29] = json_str(&json!(content));
             row[30] = u(*item_count as u64);
         }
@@ -1153,7 +1220,11 @@ fn build_attachment(ae: &claude_code_transcripts::types::AttachmentEntry) -> (Op
         DateChange { new_date } => {
             row[33] = s_str(new_date);
         }
-        DeferredToolsDelta { added_names, added_lines, removed_names } => {
+        DeferredToolsDelta {
+            added_names,
+            added_lines,
+            removed_names,
+        } => {
             row[34] = json_str(&json!(added_names));
             row[35] = match added_lines {
                 Some(v) => json_str(&json!(v)),
@@ -1164,7 +1235,11 @@ fn build_attachment(ae: &claude_code_transcripts::types::AttachmentEntry) -> (Op
                 None => Value::Null,
             };
         }
-        McpInstructionsDelta { added_names, added_blocks, removed_names } => {
+        McpInstructionsDelta {
+            added_names,
+            added_blocks,
+            removed_names,
+        } => {
             row[37] = json_str(&json!(added_names));
             row[38] = json_str(&json!(added_blocks));
             row[39] = match removed_names {
@@ -1175,7 +1250,10 @@ fn build_attachment(ae: &claude_code_transcripts::types::AttachmentEntry) -> (Op
         UltrathinkEffort { level } => {
             row[40] = s_str(level);
         }
-        QueuedCommand { prompt, command_mode } => {
+        QueuedCommand {
+            prompt,
+            command_mode,
+        } => {
             row[41] = s_str(prompt);
             row[42] = s(command_mode.clone());
         }
@@ -1191,34 +1269,39 @@ fn build_attachment(ae: &claude_code_transcripts::types::AttachmentEntry) -> (Op
     (Some(("attachment_entries", row)), children)
 }
 
-fn build_progress(pe: &claude_code_transcripts::types::ProgressEntry) -> (Option<(&'static str, Vec<Value>)>, Vec<(&'static str, Vec<Vec<Value>>)>) {
+fn build_progress(
+    pe: &claude_code_transcripts::types::ProgressEntry,
+) -> (
+    Option<(&'static str, Vec<Value>)>,
+    Vec<(&'static str, Vec<Vec<Value>>)>,
+) {
     let d = &pe.data;
     let row = vec![
-        Value::Null,                              // entry_id
-        s(pe.parent_tool_use_id.clone()),         // parent_tool_use_id
-        s(pe.tool_use_id.clone()),                // tool_use_id
-        s_str(&d.data_type),                      // data_type
-        s(d.hook_event.clone()),                  // hook_event
-        s(d.hook_name.clone()),                   // hook_name
-        s(d.command.clone()),                     // command
-        s(d.agent_id.clone()),                    // agent_id
-        s(d.prompt.clone()),                      // prompt
-        ojson(d.message.as_ref()),                // message
-        s(d.query.clone()),                       // query
-        ou32(d.result_count),                     // result_count
-        of(d.elapsed_time_seconds),               // elapsed_time_seconds
-        s(d.full_output.clone()),                 // full_output
-        s(d.output.clone()),                      // output
-        ou(d.timeout_ms),                         // timeout_ms
-        ou(d.total_lines),                        // total_lines
-        ou(d.total_bytes),                        // total_bytes
-        s(d.task_id.clone()),                     // task_id
-        s(d.server_name.clone()),                 // server_name
-        s(d.status.clone()),                      // status
-        s(d.tool_name.clone()),                   // tool_name
-        of(d.elapsed_time_ms),                    // elapsed_time_ms
-        s(d.task_description.clone()),            // task_description
-        s(d.task_type.clone()),                   // task_type
+        Value::Null,                      // entry_id
+        s(pe.parent_tool_use_id.clone()), // parent_tool_use_id
+        s(pe.tool_use_id.clone()),        // tool_use_id
+        s_str(&d.data_type),              // data_type
+        s(d.hook_event.clone()),          // hook_event
+        s(d.hook_name.clone()),           // hook_name
+        s(d.command.clone()),             // command
+        s(d.agent_id.clone()),            // agent_id
+        s(d.prompt.clone()),              // prompt
+        ojson(d.message.as_ref()),        // message
+        s(d.query.clone()),               // query
+        ou32(d.result_count),             // result_count
+        of(d.elapsed_time_seconds),       // elapsed_time_seconds
+        s(d.full_output.clone()),         // full_output
+        s(d.output.clone()),              // output
+        ou(d.timeout_ms),                 // timeout_ms
+        ou(d.total_lines),                // total_lines
+        ou(d.total_bytes),                // total_bytes
+        s(d.task_id.clone()),             // task_id
+        s(d.server_name.clone()),         // server_name
+        s(d.status.clone()),              // status
+        s(d.tool_name.clone()),           // tool_name
+        of(d.elapsed_time_ms),            // elapsed_time_ms
+        s(d.task_description.clone()),    // task_description
+        s(d.task_type.clone()),           // task_type
     ];
     (Some(("progress_entries", row)), vec![])
 }
