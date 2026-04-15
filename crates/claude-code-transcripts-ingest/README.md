@@ -1,7 +1,6 @@
 # claude-code-transcripts-ingest
 
 [![crates.io](https://img.shields.io/crates/v/claude-code-transcripts-ingest.svg)](https://crates.io/crates/claude-code-transcripts-ingest)
-[![MSRV](https://img.shields.io/badge/MSRV-1.70-blue)](https://releases.rs/docs/1.70.0/)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
 
 CLI that ingests every Claude Code transcript under `~/.claude/projects` into a
@@ -60,10 +59,6 @@ Run `cct --help` / `cct <subcommand> --help` for the authoritative flag list.
 
 The transcript parser lives in [`claude-code-transcripts`](https://crates.io/crates/claude-code-transcripts)
 and can be used standalone without DuckDB.
-
-## MSRV
-
-Rust 1.70.
 
 ## License
 

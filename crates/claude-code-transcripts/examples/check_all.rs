@@ -45,7 +45,7 @@ fn main() {
     let failure: Option<(usize, TranscriptResult)> =
         files.par_iter().enumerate().find_map_any(|(idx, path)| {
             let done = checked.fetch_add(1, Ordering::Relaxed) + 1;
-            if done % 500 == 0 {
+            if done.is_multiple_of(500) {
                 eprintln!("  {done}/{total_files}…");
             }
 

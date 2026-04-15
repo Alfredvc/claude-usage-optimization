@@ -2,7 +2,6 @@
 
 [![crates.io](https://img.shields.io/crates/v/claude-code-transcripts.svg)](https://crates.io/crates/claude-code-transcripts)
 [![docs.rs](https://img.shields.io/docsrs/claude-code-transcripts)](https://docs.rs/claude-code-transcripts)
-[![MSRV](https://img.shields.io/badge/MSRV-1.70-blue)](https://releases.rs/docs/1.70.0/)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
 
 Typed parser for Claude Code transcript JSONL files.
@@ -48,10 +47,6 @@ Two examples ship in-tree:
 cargo run --example check_one -- path/to/session.jsonl
 cargo run --example check_all                             # scans ~/.claude/projects
 ```
-
-## MSRV
-
-Rust 1.70.
 
 ## License
 

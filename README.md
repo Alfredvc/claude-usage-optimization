@@ -5,8 +5,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/alfredvc/claude-code-transcripts/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/alfredvc/claude-code-transcripts/ci.yml?branch=main&label=CI" alt="CI" /></a>
-  <a href="https://github.com/alfredvc/claude-code-transcripts/releases"><img src="https://img.shields.io/github/v/release/alfredvc/claude-code-transcripts" alt="Release" /></a>
+  <a href="https://github.com/alfredvc/claude-usage-optimization/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/alfredvc/claude-usage-optimization/ci.yml?branch=main&label=CI" alt="CI" /></a>
+  <a href="https://github.com/alfredvc/claude-usage-optimization/releases"><img src="https://img.shields.io/github/v/release/alfredvc/claude-usage-optimization" alt="Release" /></a>
   <a href="https://crates.io/crates/claude-code-transcripts-ingest"><img src="https://img.shields.io/crates/v/claude-code-transcripts-ingest.svg" alt="crates.io" /></a>
   <a href="LICENSE-MIT"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue" alt="License: MIT OR Apache-2.0" /></a>
 </p>
@@ -32,7 +32,7 @@ See [AGENTS.md](AGENTS.md).
 Install for Claude Code, Cursor, Gemini CLI, etc:
 
 ```bash
-npx skills add alfredvc/claude-code-transcripts
+npx skills add alfredvc/claude-usage-optimization
 ```
 
 Available skills:
