@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use rayon::prelude::*;
 use walkdir::WalkDir;
 
-use transcript_types::{TranscriptResult, check_transcript};
+use claude_code_transcripts::{TranscriptResult, check_transcript};
 
 fn main() {
     let projects_dir = {

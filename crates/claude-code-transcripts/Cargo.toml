@@ -1,0 +1,21 @@
+[package]
+name = "claude-code-transcripts"
+description = "Typed parser for Claude Code transcript JSONL files (session logs under ~/.claude/projects)."
+readme = "README.md"
+keywords = ["claude", "claude-code", "transcript", "parser", "anthropic"]
+categories = ["parser-implementations", "encoding"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+walkdir = { workspace = true }
+rayon = { workspace = true }

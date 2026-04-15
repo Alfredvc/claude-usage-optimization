@@ -467,6 +467,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
+name = "claude-code-transcripts"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "rayon",
+ "serde",
+ "serde_json",
+ "walkdir",
+]
+
+[[package]]
+name = "claude-code-transcripts-ingest"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "clap",
+ "claude-code-transcripts",
+ "crossbeam-channel",
+ "duckdb",
+ "rayon",
+ "serde",
+ "serde_json",
+ "toml",
+ "walkdir",
+]
+
+[[package]]
 name = "colorchoice"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2262,21 +2289,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db97caf9d906fbde555dd62fa95ddba9eecfd14cb388e4f491a66d74cd5fb79a"
 dependencies = [
  "once_cell",
-]
-
-[[package]]
-name = "transcript_types"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "clap",
- "crossbeam-channel",
- "duckdb",
- "rayon",
- "serde",
- "serde_json",
- "toml",
- "walkdir",
 ]
 
 [[package]]

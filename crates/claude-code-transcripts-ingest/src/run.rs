@@ -23,10 +23,10 @@ use rayon::prelude::*;
 use serde_json::Value;
 use walkdir::WalkDir;
 
-use crate::ingest::cli::Cli;
-use crate::ingest::parse::{ParsedFile, parse_file};
-use crate::ingest::pricing::{self, PriceRow, build_lookup, merge, seed_rows};
-use crate::ingest::schema::{
+use crate::cli::Cli;
+use crate::parse::{ParsedFile, parse_file};
+use crate::pricing::{self, PriceRow, build_lookup, merge, seed_rows};
+use crate::schema::{
     COMMENTS_DDL, DEDUPED_VIEW_DDL, INDEXES_DDL, PK_DDL, SCHEMA_DDL, TOOL_USES_VIEW_DDL,
 };
 

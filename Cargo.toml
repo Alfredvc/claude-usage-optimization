@@ -1,23 +1,25 @@
-[package]
-name = "transcript_types"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+resolver = "2"
+members = [
+    "crates/claude-code-transcripts",
+    "crates/claude-code-transcripts-ingest",
+]
 
-[dependencies]
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.70"
+license = "MIT OR Apache-2.0"
+authors = ["Alfredo V. Clemente <aemente91@gmail.com>"]
+repository = "https://github.com/alfredvc/claude-code-transcripts"
+
+[workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
 walkdir = "2"
 rayon = "1"
 clap = { version = "4", features = ["derive"] }
 duckdb = { version = "1", features = ["bundled"] }
-chrono = { version = "0.4", features = ["serde"] }
 crossbeam-channel = "0.5"
 toml = "0.8"
-
-[[bin]]
-name = "ingest"
-path = "src/bin/ingest.rs"
-
-[[bin]]
-name = "check_all"
-path = "src/bin/check_all.rs"

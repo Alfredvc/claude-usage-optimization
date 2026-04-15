@@ -12,8 +12,8 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 
-use crate::ingest::pricing::{PriceRow, compute_cost};
-use crate::types::{
+use crate::pricing::{PriceRow, compute_cost};
+use claude_code_transcripts::types::{
     AssistantContentBlock, AttachmentData, CacheCreation, Entry, ImageSource, DocumentSource,
     UserContent, UserContentBlock,
 };
@@ -392,7 +392,7 @@ fn entry_type_and_subtype(e: &Entry) -> (&'static str, Option<String>) {
     }
 }
 
-fn envelope_of(e: &Entry) -> Option<&crate::types::Envelope> {
+fn envelope_of(e: &Entry) -> Option<&claude_code_transcripts::types::Envelope> {
     match e {
         Entry::User(x) => Some(&x.envelope),
         Entry::Assistant(x) => Some(&x.envelope),
@@ -665,7 +665,7 @@ fn build_variant(
     }
 }
 
-fn build_user(ue: &crate::types::UserEntry) -> (Option<(&'static str, Vec<Value>)>, Vec<(&'static str, Vec<Vec<Value>>)>) {
+fn build_user(ue: &claude_code_transcripts::types::UserEntry) -> (Option<(&'static str, Vec<Value>)>, Vec<(&'static str, Vec<Vec<Value>>)>) {
     let role = serde_json::to_value(&ue.message.role)
         .ok()
         .and_then(|v| v.as_str().map(|s| s.to_string()))
@@ -769,7 +769,7 @@ fn build_user(ue: &crate::types::UserEntry) -> (Option<(&'static str, Vec<Value>
 }
 
 fn build_assistant(
-    ae: &crate::types::AssistantEntry,
+    ae: &claude_code_transcripts::types::AssistantEntry,
     pricing: &HashMap<String, PriceRow>,
     unknown_models: &mut Vec<String>,
 ) -> (Option<(&'static str, Vec<Value>)>, Vec<(&'static str, Vec<Vec<Value>>)>) {
@@ -935,7 +935,7 @@ fn build_assistant(
     (Some(("assistant_entries", row)), children)
 }
 
-fn build_system(se: &crate::types::SystemEntry) -> (Option<(&'static str, Vec<Value>)>, Vec<(&'static str, Vec<Vec<Value>>)>) {
+fn build_system(se: &claude_code_transcripts::types::SystemEntry) -> (Option<(&'static str, Vec<Value>)>, Vec<(&'static str, Vec<Vec<Value>>)>) {
     let subtype_str = serde_json::to_value(&se.subtype)
         .ok()
         .and_then(|v| v.as_str().map(|s| s.to_string()))
@@ -999,7 +999,7 @@ fn build_system(se: &crate::types::SystemEntry) -> (Option<(&'static str, Vec<Va
     (Some(("system_entries", row)), children)
 }
 
-fn build_attachment(ae: &crate::types::AttachmentEntry) -> (Option<(&'static str, Vec<Value>)>, Vec<(&'static str, Vec<Vec<Value>>)>) {
+fn build_attachment(ae: &claude_code_transcripts::types::AttachmentEntry) -> (Option<(&'static str, Vec<Value>)>, Vec<(&'static str, Vec<Vec<Value>>)>) {
     use AttachmentData::*;
     // Initialise wide row as all NULL then fill the relevant slots.
     let mut row: Vec<Value> = vec![Value::Null; 43];
@@ -1049,7 +1049,7 @@ fn build_attachment(ae: &crate::types::AttachmentEntry) -> (Option<(&'static str
     // 39 mcp_removed_names, 40 ultrathink_level, 41 queued_command_prompt,
     // 42 queued_command_mode
 
-    let fill_hook = |row: &mut Vec<Value>, h: &crate::types::HookResultAttachment| {
+    let fill_hook = |row: &mut Vec<Value>, h: &claude_code_transcripts::types::HookResultAttachment| {
         row[2] = s(h.hook_name.clone());
         row[3] = s(h.tool_use_id.clone());
         row[4] = s(h.hook_event.clone());
@@ -1191,7 +1191,7 @@ fn build_attachment(ae: &crate::types::AttachmentEntry) -> (Option<(&'static str
     (Some(("attachment_entries", row)), children)
 }
 
-fn build_progress(pe: &crate::types::ProgressEntry) -> (Option<(&'static str, Vec<Value>)>, Vec<(&'static str, Vec<Vec<Value>>)>) {
+fn build_progress(pe: &claude_code_transcripts::types::ProgressEntry) -> (Option<(&'static str, Vec<Value>)>, Vec<(&'static str, Vec<Vec<Value>>)>) {
     let d = &pe.data;
     let row = vec![
         Value::Null,                              // entry_id

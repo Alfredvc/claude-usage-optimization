@@ -1,0 +1,28 @@
+[package]
+name = "claude-code-transcripts-ingest"
+description = "CLI that ingests Claude Code transcript JSONL files into a DuckDB database for usage / cost analysis."
+readme = "README.md"
+keywords = ["claude", "claude-code", "duckdb", "ingest", "anthropic"]
+categories = ["command-line-utilities", "database"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "claude-code-transcripts-ingest"
+path = "src/main.rs"
+
+[dependencies]
+claude-code-transcripts = { path = "../claude-code-transcripts", version = "0.1" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+walkdir = { workspace = true }
+rayon = { workspace = true }
+clap = { workspace = true }
+duckdb = { workspace = true }
+crossbeam-channel = { workspace = true }
+toml = { workspace = true }
