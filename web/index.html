@@ -7,6 +7,8 @@
   <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/prop-types@15/prop-types.min.js"></script>
+  <script src="https://unpkg.com/recharts@2/umd/Recharts.js"></script>
   <style>
     :root {
       --bg: #0d1117;
@@ -143,12 +145,64 @@
     .card-preview { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .summary-row { display: flex; gap: 8px; align-items: center; font-size: 10px; color: var(--muted); flex-wrap: wrap; margin-top: 4px; }
     .summary-badge { display: inline-flex; align-items: center; gap: 2px; }
+
+    /* ── Tab navigation ── */
+    .tab-nav { display: flex; gap: 2px; }
+    .tab-btn {
+      background: var(--surface2); color: var(--muted); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 5px 14px; font-size: 12px; cursor: pointer;
+      font-weight: 500;
+    }
+    .tab-btn.active { background: var(--accent); color: #0d1117; border-color: var(--accent); font-weight: 700; }
+
+    /* ── Dashboard layout ── */
+    .dashboard { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 16px; }
+    .panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; }
+    .panel-title { font-size: 12px; font-weight: 600; color: var(--text); margin-bottom: 10px; letter-spacing: 0.02em; text-transform: uppercase; }
+    .panel-meta { font-size: 10px; color: var(--muted); margin-left: 6px; font-weight: 400; text-transform: none; letter-spacing: 0; }
+
+    /* ── Stat cards ── */
+    .stat-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+    .stat-card { background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; }
+    .stat-label { font-size: 10px; color: var(--muted); margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.05em; }
+    .stat-value { font-size: 20px; font-weight: 700; color: var(--text); }
+    .stat-sub { font-size: 10px; color: var(--muted); margin-top: 2px; }
+
+    /* ── Data tables ── */
+    .data-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+    .data-table th {
+      text-align: left; color: var(--muted); font-weight: 500; padding: 4px 8px;
+      border-bottom: 1px solid var(--border); white-space: nowrap;
+    }
+    .data-table td { padding: 5px 8px; border-bottom: 1px solid #21262d; color: var(--text); }
+    .data-table tr:last-child td { border-bottom: none; }
+    .data-table tr:hover td { background: var(--surface2); }
+    .data-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .data-table td.cost { text-align: right; color: #7ee787; font-weight: 600; }
+    .data-table td.link { color: var(--accent); cursor: pointer; text-decoration: underline; }
+
+    /* ── Cache/agent metrics ── */
+    .metric-row { display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 10px; }
+    .metric { display: flex; flex-direction: column; }
+    .metric-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+    .metric-value { font-size: 18px; font-weight: 700; color: var(--text); }
+    .metric-sub { font-size: 10px; color: var(--muted); }
+
+    /* ── Loading / error states ── */
+    .panel-loading { color: var(--muted); font-size: 11px; text-align: center; padding: 20px; }
+    .panel-error { color: #f85149; font-size: 11px; padding: 8px; }
+
+    /* ── Breadcrumb ── */
+    .breadcrumb { font-size: 11px; color: var(--muted); }
+    .breadcrumb a { color: var(--accent); cursor: pointer; text-decoration: none; }
+    .breadcrumb a:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
 <div id="root"></div>
 <script type="text/babel">
 const { useState, useEffect, useCallback, useMemo, useRef } = React;
+const { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } = window.Recharts || {};
 
 // ── Pricing (USD / million tokens) — used for cost bar color breakdown only ──
 const PRICES = {
@@ -193,6 +247,15 @@ function fmtCost(c) {
   if (c >= 0.01) return `$${c.toFixed(3)}`;
   return `$${c.toFixed(4)}`;
 }
+
+const fmtPct = n => `${((n || 0) * 100).toFixed(1)}%`;
+const fmtNum = n => n >= 1e6 ? `${(n/1e6).toFixed(2)}M` : n >= 1000 ? `${(n/1000).toFixed(1)}K` : String(n || 0);
+const shortModel = m => (m || '').replace('claude-', '').replace(/-\d{8}$/, '') || 'unknown';
+const shortPath = (p, n=3) => {
+  if (!p) return '';
+  const parts = p.split('/').filter(Boolean);
+  return parts.length > n ? '…/' + parts.slice(-n).join('/') : p;
+};
 
 // ── TruncText ──────────────────────────────────────────────────────────────
 function TruncText({ text, limit = 200, className = '' }) {
@@ -279,7 +342,7 @@ function UserCard({ item }) {
 function ApiCard({ item, maxCost, sessionId }) {
   const [expanded, setExpanded] = useState(false);
   const usage = useMemo(() => getUsage(item), [item]);
-  const shortModel = item.model ? item.model.replace('claude-', '').replace(/-\d{8}$/, '') : '';
+  const shortModelName = item.model ? item.model.replace('claude-', '').replace(/-\d{8}$/, '') : '';
   const toolUses = item.tool_uses || [];
   const texts = item.texts || [];
   const hasDetails = texts.length > 0 || toolUses.length > 0;
@@ -288,7 +351,7 @@ function ApiCard({ item, maxCost, sessionId }) {
       <div className="api-header">
         <span className="api-num">API #{item.num}</span>
         <span className="api-cost">{fmtCost(item.cost_usd)}</span>
-        {shortModel && <span className="api-model">{shortModel}</span>}
+        {shortModelName && <span className="api-model">{shortModelName}</span>}
         {item.timestamp && <span style={{ color: 'var(--muted)', fontSize: 10 }}>{new Date(item.timestamp).toLocaleTimeString()}</span>}
         {hasDetails && <span className="expand-chevron">{expanded ? '▲' : '▼'}</span>}
       </div>
@@ -574,64 +637,558 @@ function renderItem(item, idx, maxCost, sessionId) {
 // ── URL param sync ─────────────────────────────────────────────────────────
 function getUrlParams() {
   const p = new URLSearchParams(window.location.search);
-  return { project: p.get('project') || '', session: p.get('session') || '', sort: p.get('sort') || 'date' };
+  return {
+    project: p.get('project') || '',
+    session: p.get('session') || '',
+    sort: p.get('sort') || 'date',
+    tab: p.get('tab') || 'dashboard',
+    range: p.get('range') || '30d',
+  };
 }
 
-// ── App ────────────────────────────────────────────────────────────────────
-function App() {
-  const initUrl = useMemo(() => getUrlParams(), []);
-  const [projects,    setProjects]    = useState([]);
-  const [projectKey,  setProjectKey]  = useState(initUrl.project);
+// ── Time range helpers ─────────────────────────────────────────────────────
+function timeParams(timeRange) {
+  if (timeRange === 'all') return '';
+  const days = timeRange === '7d' ? 7 : timeRange === '30d' ? 30 : 90;
+  const from = new Date(Date.now() - days * 86400000).toISOString();
+  const to = new Date().toISOString();
+  return `from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+}
+
+function buildUrl(path, timeRange, extraParams = {}) {
+  const parts = [];
+  const tp = timeParams(timeRange);
+  if (tp) parts.push(tp);
+  for (const [k, v] of Object.entries(extraParams)) {
+    if (v != null && v !== '') parts.push(`${k}=${encodeURIComponent(v)}`);
+  }
+  return parts.length ? `${path}?${parts.join('&')}` : path;
+}
+
+// ── usePanel hook ──────────────────────────────────────────────────────────
+function usePanel(url) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState(null);
+  useEffect(() => {
+    if (!url) { setData(null); return; }
+    setLoading(true); setData(null); setErr(null);
+    fetch(url)
+      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then(d => { setData(d); setLoading(false); })
+      .catch(e => { setErr(e.message); setLoading(false); });
+  }, [url]);
+  return { data, loading, err };
+}
+
+// ── Panel wrapper ──────────────────────────────────────────────────────────
+function Panel({ title, meta, loading, err, children }) {
+  return (
+    <div className="panel">
+      <div className="panel-title">
+        {title}
+        {meta && <span className="panel-meta">{meta}</span>}
+      </div>
+      {loading && <div className="panel-loading">Loading…</div>}
+      {err && <div className="panel-error">Error: {err}</div>}
+      {!loading && !err && children}
+    </div>
+  );
+}
+
+// ── SummaryBar ─────────────────────────────────────────────────────────────
+function SummaryBar({ data }) {
+  if (!data) return null;
+  return (
+    <div className="stat-cards">
+      <div className="stat-card">
+        <div className="stat-label">Total Spend</div>
+        <div className="stat-value" style={{ color: '#7ee787' }}>{fmtCost(data.cost_usd || 0)}</div>
+      </div>
+      <div className="stat-card">
+        <div className="stat-label">Sessions</div>
+        <div className="stat-value">{fmtNum((data.session_count || 0) + (data.subagent_count || 0))}</div>
+        <div className="stat-sub">{fmtNum(data.session_count || 0)} main + {fmtNum(data.subagent_count || 0)} subagents</div>
+      </div>
+      <div className="stat-card">
+        <div className="stat-label">API Calls</div>
+        <div className="stat-value">{fmtNum(data.api_call_count || 0)}</div>
+      </div>
+      <div className="stat-card">
+        <div className="stat-label">Avg Cost / Session</div>
+        <div className="stat-value" style={{ color: '#7ee787' }}>{fmtCost(data.avg_cost_per_session || 0)}</div>
+      </div>
+    </div>
+  );
+}
+
+// ── DailySpendChart ────────────────────────────────────────────────────────
+function DailySpendChart({ data }) {
+  if (!BarChart) {
+    return <div className="panel-error">Recharts not loaded</div>;
+  }
+  if (!data || data.length === 0) {
+    return <div className="panel-loading">No data</div>;
+  }
+  const chartData = data.map(d => ({
+    date: d.date,
+    label: (() => {
+      try { return new Date(d.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); }
+      catch { return d.date; }
+    })(),
+    Opus: d.cost_opus || 0,
+    Sonnet: d.cost_sonnet || 0,
+    Haiku: d.cost_haiku || 0,
+  }));
+  return (
+    <div style={{ width: '100%', height: 200 }}>
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart data={chartData} margin={{ top: 6, right: 10, left: 0, bottom: 4 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
+          <XAxis dataKey="label" stroke="#8b949e" tick={{ fontSize: 10 }} />
+          <YAxis stroke="#8b949e" tick={{ fontSize: 10 }} tickFormatter={v => `$${v}`} />
+          <Tooltip
+            contentStyle={{ background: '#1c2128', border: '1px solid #30363d', fontSize: 11 }}
+            formatter={(v, n) => [fmtCost(v), n]}
+          />
+          <Legend wrapperStyle={{ fontSize: 11 }} />
+          <Bar dataKey="Opus" stackId="a" fill="#f59e0b" />
+          <Bar dataKey="Sonnet" stackId="a" fill="#3b82f6" />
+          <Bar dataKey="Haiku" stackId="a" fill="#22c55e" />
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+// ── ModelBreakdownTable ────────────────────────────────────────────────────
+function ModelBreakdownTable({ data }) {
+  if (!data || data.length === 0) return <div className="panel-loading">No data</div>;
+  return (
+    <table className="data-table">
+      <thead>
+        <tr>
+          <th>Model</th>
+          <th className="num">Sessions</th>
+          <th className="num">API Calls</th>
+          <th className="num">Total Cost</th>
+          <th className="num">% Spend</th>
+          <th className="num">Avg $/Turn</th>
+        </tr>
+      </thead>
+      <tbody>
+        {data.map((r, i) => (
+          <tr key={i}>
+            <td>{shortModel(r.model)}</td>
+            <td className="num">{fmtNum(r.sessions)}</td>
+            <td className="num">{fmtNum(r.api_calls)}</td>
+            <td className="cost">{fmtCost(r.cost_usd || 0)}</td>
+            <td className="num">{fmtPct(r.pct_spend || 0)}</td>
+            <td className="cost">{fmtCost(r.avg_cost_per_turn || 0)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+// ── CacheHealthPanel ───────────────────────────────────────────────────────
+function CacheHealthPanel({ data }) {
+  if (!data) return <div className="panel-loading">No data</div>;
+  const thrash = data.thrash_turns || [];
+  return (
+    <>
+      <div className="metric-row">
+        <div className="metric">
+          <div className="metric-label">Hit Rate</div>
+          <div className="metric-value">{fmtPct(data.hit_rate || 0)}</div>
+        </div>
+        <div className="metric">
+          <div className="metric-label">Create Rate</div>
+          <div className="metric-value">{fmtPct(data.create_rate || 0)}</div>
+        </div>
+        <div className="metric">
+          <div className="metric-label">Total Tokens</div>
+          <div className="metric-value">{fmtTok(data.total_tokens || 0)}</div>
+          <div className="metric-sub">
+            CR: {fmtTok(data.cache_read_tokens || 0)} · CW: {fmtTok(data.cache_create_tokens || 0)}
+          </div>
+        </div>
+      </div>
+      {thrash.length > 0 && (
+        <>
+          <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 8, marginBottom: 6 }}>Top Thrash Turns</div>
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Session</th>
+                <th>Project</th>
+                <th className="num">Cost</th>
+                <th className="num">CC Tokens</th>
+                <th className="num">Output Tokens</th>
+              </tr>
+            </thead>
+            <tbody>
+              {thrash.map((t, i) => (
+                <tr key={i}>
+                  <td>{(t.session_id || '').slice(0, 8)}</td>
+                  <td title={t.project}>{shortPath(t.project, 2)}</td>
+                  <td className="cost">{fmtCost(t.cost_usd || 0)}</td>
+                  <td className="num">{fmtTok(t.cc_tokens || 0)}</td>
+                  <td className="num">{fmtTok(t.output_tokens || 0)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+    </>
+  );
+}
+
+// ── AgentModelPanel ────────────────────────────────────────────────────────
+function AgentModelPanel({ data }) {
+  if (!data) return <div className="panel-loading">No data</div>;
+  const explicit = data.explicit_calls || 0;
+  const inherited = data.inherited_calls || 0;
+  const total = explicit + inherited;
+  const inheritedPct = total > 0 ? inherited / total : 0;
+  const subtypes = data.subtypes || [];
+  return (
+    <>
+      <div className="metric-row">
+        <div className="metric">
+          <div className="metric-label">Explicit Calls</div>
+          <div className="metric-value">{fmtNum(explicit)}</div>
+        </div>
+        <div className="metric">
+          <div className="metric-label">Inherited Calls</div>
+          <div className="metric-value">{fmtNum(inherited)}</div>
+          <div className="metric-sub">{fmtPct(inheritedPct)} of total</div>
+        </div>
+        <div className="metric">
+          <div className="metric-label">Inherited Cost</div>
+          <div className="metric-value" style={{ color: '#7ee787' }}>{fmtCost(data.inherited_cost_usd || 0)}</div>
+        </div>
+      </div>
+      {subtypes.length > 0 && (
+        <>
+          <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 8, marginBottom: 6 }}>Subtypes</div>
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Subtype</th>
+                <th className="num">Count</th>
+              </tr>
+            </thead>
+            <tbody>
+              {subtypes.map((s, i) => (
+                <tr key={i}>
+                  <td>{s.subtype || '(unknown)'}</td>
+                  <td className="num">{fmtNum(s.count)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+    </>
+  );
+}
+
+// ── TopSessionsTable ───────────────────────────────────────────────────────
+function TopSessionsTable({ data, projects, navigateToSession }) {
+  if (!data || data.length === 0) return <div className="panel-loading">No data</div>;
+  const projMap = useMemo(() => {
+    const m = {};
+    (projects || []).forEach(p => { m[p.key] = p.display; });
+    return m;
+  }, [projects]);
+  return (
+    <table className="data-table">
+      <thead>
+        <tr>
+          <th>Session</th>
+          <th>Project</th>
+          <th>Started</th>
+          <th className="num">Cost</th>
+          <th className="num">Turns</th>
+          <th className="num">Errors</th>
+          <th className="num">Subagents</th>
+        </tr>
+      </thead>
+      <tbody>
+        {data.map((s, i) => (
+          <tr key={i} style={{ cursor: 'pointer' }} onClick={() => navigateToSession(s.project, s.session_id)}>
+            <td className="link">{(s.session_id || '').slice(0, 8)}</td>
+            <td title={s.project}>{projMap[s.project] || shortPath(s.project, 2)}</td>
+            <td>{fmtDate(s.started_at)}</td>
+            <td className="cost">{fmtCost(s.cost_usd || 0)}</td>
+            <td className="num">{fmtNum(s.turn_count || 0)}</td>
+            <td className="num" style={{ color: (s.error_count || 0) > 0 ? '#f85149' : undefined }}>{fmtNum(s.error_count || 0)}</td>
+            <td className="num">{fmtNum(s.subagent_count || 0)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+// ── SessionDistributionTable ───────────────────────────────────────────────
+function SessionDistributionTable({ data }) {
+  if (!data || data.length === 0) return <div className="panel-loading">No data</div>;
+  return (
+    <table className="data-table">
+      <thead>
+        <tr>
+          <th>Bucket (turns)</th>
+          <th className="num">Sessions</th>
+          <th className="num">Total $</th>
+          <th className="num">Avg $</th>
+          <th className="num">Max $</th>
+        </tr>
+      </thead>
+      <tbody>
+        {data.map((r, i) => (
+          <tr key={i}>
+            <td>{r.bucket}</td>
+            <td className="num">{fmtNum(r.session_count || 0)}</td>
+            <td className="cost">{fmtCost(r.total_cost || 0)}</td>
+            <td className="cost">{fmtCost(r.avg_cost || 0)}</td>
+            <td className="cost">{fmtCost(r.max_cost || 0)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+// ── FileHotspotsTable ──────────────────────────────────────────────────────
+function FileHotspotsTable({ data }) {
+  if (!data || data.length === 0) return <div className="panel-loading">No data</div>;
+  return (
+    <table className="data-table">
+      <thead>
+        <tr>
+          <th>File</th>
+          <th className="num">Distinct Sessions</th>
+          <th className="num">Total Reads</th>
+        </tr>
+      </thead>
+      <tbody>
+        {data.map((r, i) => (
+          <tr key={i}>
+            <td title={r.file_path}>{shortPath(r.file_path, 3)}</td>
+            <td className="num">{fmtNum(r.distinct_sessions || 0)}</td>
+            <td className="num">{fmtNum(r.total_reads || 0)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+// ── ErrorSummaryPanel ──────────────────────────────────────────────────────
+function ErrorSummaryPanel({ data }) {
+  if (!data) return <div className="panel-loading">No data</div>;
+  const types = data.types || [];
+  const buckets = data.by_bucket || [];
+  return (
+    <>
+      <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 6 }}>Error Types</div>
+      {types.length === 0
+        ? <div className="panel-loading">No errors</div>
+        : (
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Type</th>
+                <th className="num">Count</th>
+                <th className="num">Sessions Affected</th>
+              </tr>
+            </thead>
+            <tbody>
+              {types.map((r, i) => (
+                <tr key={i}>
+                  <td>{r.error_type}</td>
+                  <td className="num">{fmtNum(r.count || 0)}</td>
+                  <td className="num">{fmtNum(r.sessions_affected || 0)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )
+      }
+      <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 12, marginBottom: 6 }}>$/Turn by Error Bucket</div>
+      {buckets.length === 0
+        ? <div className="panel-loading">No data</div>
+        : (
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Bucket</th>
+                <th className="num">Sessions</th>
+                <th className="num">Avg $/Turn</th>
+                <th className="num">Errors/Turn</th>
+              </tr>
+            </thead>
+            <tbody>
+              {buckets.map((r, i) => (
+                <tr key={i}>
+                  <td>{r.bucket}</td>
+                  <td className="num">{fmtNum(r.sessions || 0)}</td>
+                  <td className="cost">{fmtCost(r.avg_cost_per_turn || 0)}</td>
+                  <td className="num">{(r.errors_per_turn || 0).toFixed(3)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )
+      }
+    </>
+  );
+}
+
+// ── GlobalDashboard ────────────────────────────────────────────────────────
+function GlobalDashboard({ timeRange, projects, navigateToSession }) {
+  const urls = useMemo(() => ({
+    summary: buildUrl('/api/dashboard/summary', timeRange),
+    daily:   buildUrl('/api/dashboard/daily', timeRange),
+    models:  buildUrl('/api/dashboard/models', timeRange),
+    cache:   buildUrl('/api/dashboard/cache', timeRange),
+    agents:  buildUrl('/api/dashboard/agents', timeRange),
+    top:     buildUrl('/api/dashboard/top-sessions', timeRange),
+  }), [timeRange]);
+  const summary = usePanel(urls.summary);
+  const daily   = usePanel(urls.daily);
+  const models  = usePanel(urls.models);
+  const cache   = usePanel(urls.cache);
+  const agents  = usePanel(urls.agents);
+  const top     = usePanel(urls.top);
+
+  return (
+    <>
+      <Panel title="Summary" meta={timeRange === 'all' ? 'all time' : `last ${timeRange}`} loading={summary.loading} err={summary.err}>
+        <SummaryBar data={summary.data} />
+      </Panel>
+      <Panel title="Daily Spend by Model" loading={daily.loading} err={daily.err}>
+        <DailySpendChart data={daily.data} />
+      </Panel>
+      <Panel title="Model Breakdown" loading={models.loading} err={models.err}>
+        <ModelBreakdownTable data={models.data} />
+      </Panel>
+      <Panel title="Cache Health" loading={cache.loading} err={cache.err}>
+        <CacheHealthPanel data={cache.data} />
+      </Panel>
+      <Panel title="Agent Model Usage" loading={agents.loading} err={agents.err}>
+        <AgentModelPanel data={agents.data} />
+      </Panel>
+      <Panel title="Top Sessions" meta="by cost · click a row to open in Transcripts" loading={top.loading} err={top.err}>
+        <TopSessionsTable data={top.data} projects={projects} navigateToSession={navigateToSession} />
+      </Panel>
+    </>
+  );
+}
+
+// ── ProjectDashboard ───────────────────────────────────────────────────────
+function ProjectDashboard({ project, timeRange }) {
+  const urls = useMemo(() => ({
+    summary: buildUrl('/api/dashboard/project-summary', timeRange, { project }),
+    dist:    buildUrl('/api/dashboard/session-distribution', timeRange, { project }),
+    files:   buildUrl('/api/dashboard/file-hotspots', timeRange, { project }),
+    errors:  buildUrl('/api/dashboard/errors', timeRange, { project }),
+  }), [timeRange, project]);
+  const summary = usePanel(urls.summary);
+  const dist    = usePanel(urls.dist);
+  const files   = usePanel(urls.files);
+  const errors  = usePanel(urls.errors);
+
+  return (
+    <>
+      <Panel title="Summary" meta={timeRange === 'all' ? 'all time' : `last ${timeRange}`} loading={summary.loading} err={summary.err}>
+        <SummaryBar data={summary.data} />
+      </Panel>
+      <Panel title="Session Distribution" meta="by turn count" loading={dist.loading} err={dist.err}>
+        <SessionDistributionTable data={dist.data} />
+      </Panel>
+      <Panel title="File Hotspots" meta="top 30 by distinct session reads" loading={files.loading} err={files.err}>
+        <FileHotspotsTable data={files.data} />
+      </Panel>
+      <Panel title="Errors" loading={errors.loading} err={errors.err}>
+        <ErrorSummaryPanel data={errors.data} />
+      </Panel>
+    </>
+  );
+}
+
+// ── DashboardView ──────────────────────────────────────────────────────────
+function DashboardView({ selectedProject, timeRange, projects, navigateToSession, goHome }) {
+  const projDisplay = useMemo(() => {
+    const p = projects.find(x => x.key === selectedProject);
+    return p ? p.display : selectedProject;
+  }, [projects, selectedProject]);
+
+  return (
+    <div className="dashboard">
+      {selectedProject && (
+        <div className="breadcrumb">
+          <a onClick={goHome}>All Projects</a> &rsaquo; {projDisplay}
+        </div>
+      )}
+      {selectedProject === ''
+        ? <GlobalDashboard timeRange={timeRange} projects={projects} navigateToSession={navigateToSession} />
+        : <ProjectDashboard project={selectedProject} timeRange={timeRange} />
+      }
+    </div>
+  );
+}
+
+// ── TranscriptView ─────────────────────────────────────────────────────────
+function TranscriptView({ selectedProject, initialSessionId, initialSort }) {
   const [sessions,    setSessions]    = useState([]);
-  const [sessionId,   setSessionId]   = useState(initUrl.session);
-  const [sortBy,      setSortBy]      = useState(initUrl.sort);
+  const [sessionId,   setSessionId]   = useState(initialSessionId || '');
+  const [sortBy,      setSortBy]      = useState(initialSort || 'date');
   const [timeline,    setTimeline]    = useState(null);
   const [loading,     setLoading]     = useState(false);
   const [err,         setErr]         = useState(null);
 
   // Preserve URL session on first project load; cleared after first use
-  const initSessionRef = useRef(initUrl.session || null);
+  const initSessionRef = useRef(initialSessionId || null);
 
-  // Sync URL whenever selection changes
+  // Sync session + sort back to URL (preserve tab/range/project already set by App)
   useEffect(() => {
-    const p = new URLSearchParams();
-    if (projectKey) p.set('project', projectKey);
-    if (sessionId)  p.set('session', sessionId);
-    if (sortBy !== 'date') p.set('sort', sortBy);
+    const p = new URLSearchParams(window.location.search);
+    if (sessionId) p.set('session', sessionId); else p.delete('session');
+    if (sortBy !== 'date') p.set('sort', sortBy); else p.delete('sort');
     const qs = p.toString();
     window.history.replaceState(null, '', qs ? '?' + qs : window.location.pathname);
-  }, [projectKey, sessionId, sortBy]);
+  }, [sessionId, sortBy]);
 
+  // When project changes (or is cleared), load its sessions
   useEffect(() => {
-    fetch('/api/projects')
-      .then(r => r.json())
-      .then(data => {
-        setProjects(data);
-        // Only auto-select if URL didn't provide a project
-        if (data.length && !initUrl.project) setProjectKey(data[0].key);
-      })
-      .catch(() => setErr('Cannot reach server — is claude-code-transcripts-serve running? (cargo run --features serve --bin claude-code-transcripts-serve)'));
-  }, []);
-
-  useEffect(() => {
-    if (!projectKey) return;
-    setSessions([]); setTimeline(null);
+    setTimeline(null);
+    if (!selectedProject) {
+      setSessions([]);
+      setSessionId('');
+      return;
+    }
+    setSessions([]);
     const preserveSession = initSessionRef.current;
     if (!preserveSession) setSessionId('');
-    fetch(`/api/sessions?project=${encodeURIComponent(projectKey)}`)
+    fetch(`/api/sessions?project=${encodeURIComponent(selectedProject)}`)
       .then(r => r.json())
       .then(data => {
         setSessions(data);
         if (preserveSession) {
           initSessionRef.current = null;
-          // If URL session not found in list, fall back to first
           if (!data.find(s => s.id === preserveSession) && data.length) setSessionId(data[0].id);
+          else setSessionId(preserveSession);
         } else {
           if (data.length) setSessionId(data[0].id);
         }
       })
       .catch(() => {});
-  }, [projectKey]);
+  }, [selectedProject]);
 
   const sortedSessions = useMemo(() => {
     const s = [...sessions];
@@ -641,34 +1198,35 @@ function App() {
   }, [sessions, sortBy]);
 
   const load = useCallback(async () => {
-    if (!projectKey || !sessionId) return;
+    if (!selectedProject || !sessionId) return;
     setLoading(true); setErr(null); setTimeline(null);
     try {
-      const r = await fetch(`/api/transcript?project=${encodeURIComponent(projectKey)}&session=${encodeURIComponent(sessionId)}`);
+      const r = await fetch(`/api/transcript?project=${encodeURIComponent(selectedProject)}&session=${encodeURIComponent(sessionId)}`);
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const data = await r.json();
       setTimeline(data.entries || []);
     } catch (e) { setErr(e.message); }
     setLoading(false);
-  }, [projectKey, sessionId]);
+  }, [selectedProject, sessionId]);
 
-  useEffect(() => { if (sessionId) load(); }, [sessionId]);
+  useEffect(() => { if (sessionId) load(); }, [sessionId, selectedProject]);
 
   const apiItems = useMemo(() => (timeline || []).filter(i => i.kind === 'assistant'), [timeline]);
   const maxCost  = useMemo(() => Math.max(1e-9, ...apiItems.map(i => i.cost_usd || 0)), [apiItems]);
 
+  if (!selectedProject) {
+    return (
+      <>
+        <div className="timeline">
+          <div className="empty">Select a project from the header dropdown to view transcripts.</div>
+        </div>
+      </>
+    );
+  }
+
   return (
     <>
-      <div className="header">
-        <label>Project</label>
-        <select value={projectKey} onChange={e => setProjectKey(e.target.value)} style={{ minWidth: 180, maxWidth: 320 }}>
-          {projects.map(p => (
-            <option key={p.key} value={p.key}>{p.display} ({p.sessionCount})</option>
-          ))}
-        </select>
-
-        <span className="sep">·</span>
-
+      <div className="header" style={{ borderTop: '1px solid var(--border)' }}>
         <label>Sort</label>
         <div className="sort-group">
           <button className={`sort-btn ${sortBy === 'date' ? 'active' : ''}`} onClick={() => setSortBy('date')}>date</button>
@@ -696,7 +1254,7 @@ function App() {
       {timeline && <ActivityBreakdown timeline={timeline} />}
 
       <div className="timeline">
-        {!timeline && !loading && <div className="empty">Select a project and session above</div>}
+        {!timeline && !loading && <div className="empty">Select a session above</div>}
         {loading && <div className="empty">Loading transcript…</div>}
         {timeline && timeline.map((item, idx) => renderItem(item, idx, maxCost, sessionId))}
       </div>
@@ -712,6 +1270,110 @@ function App() {
           tok bar: 100% = 1M tokens · cost bar: 100% = max call cost in session · cost from DB
         </span>
       </div>
+    </>
+  );
+}
+
+// ── App ────────────────────────────────────────────────────────────────────
+function App() {
+  const initUrl = useMemo(() => getUrlParams(), []);
+  const [projects,        setProjects]        = useState([]);
+  const [selectedProject, setSelectedProject] = useState(initUrl.project);
+  const [activeTab,       setActiveTab]       = useState(initUrl.tab === 'transcripts' ? 'transcripts' : 'dashboard');
+  const [timeRange,       setTimeRange]       = useState(['7d','30d','90d','all'].includes(initUrl.range) ? initUrl.range : '30d');
+  const [transcriptSessionId, setTranscriptSessionId] = useState(initUrl.session);
+  const [err,             setErr]             = useState(null);
+
+  // Sync top-level state to URL
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search);
+    if (activeTab !== 'dashboard') p.set('tab', activeTab); else p.delete('tab');
+    if (timeRange !== '30d') p.set('range', timeRange); else p.delete('range');
+    if (selectedProject) p.set('project', selectedProject); else p.delete('project');
+    // session/sort are managed by TranscriptView — leave them alone here
+    const qs = p.toString();
+    window.history.replaceState(null, '', qs ? '?' + qs : window.location.pathname);
+  }, [activeTab, timeRange, selectedProject]);
+
+  useEffect(() => {
+    fetch('/api/projects')
+      .then(r => r.json())
+      .then(data => { setProjects(data); })
+      .catch(() => setErr('Cannot reach server — is claude-code-transcripts-serve running? (cargo run --features serve --bin claude-code-transcripts-serve)'));
+  }, []);
+
+  const navigateToSession = useCallback((project, sessionId) => {
+    setSelectedProject(project || '');
+    setTranscriptSessionId(sessionId || '');
+    setActiveTab('transcripts');
+  }, []);
+
+  const goHome = useCallback(() => {
+    setSelectedProject('');
+  }, []);
+
+  const TIME_RANGES = ['7d', '30d', '90d', 'all'];
+
+  return (
+    <>
+      <div className="header">
+        <div className="tab-nav">
+          <button
+            className={`tab-btn ${activeTab === 'dashboard' ? 'active' : ''}`}
+            onClick={() => setActiveTab('dashboard')}
+          >Dashboard</button>
+          <button
+            className={`tab-btn ${activeTab === 'transcripts' ? 'active' : ''}`}
+            onClick={() => setActiveTab('transcripts')}
+          >Transcripts</button>
+        </div>
+
+        {activeTab === 'dashboard' && (
+          <>
+            <span className="sep">·</span>
+            <div className="sort-group">
+              {TIME_RANGES.map(r => (
+                <button
+                  key={r}
+                  className={`sort-btn ${timeRange === r ? 'active' : ''}`}
+                  onClick={() => setTimeRange(r)}
+                >{r === 'all' ? 'All' : r}</button>
+              ))}
+            </div>
+          </>
+        )}
+
+        <span className="sep">·</span>
+
+        <label>Project</label>
+        <select
+          value={selectedProject}
+          onChange={e => setSelectedProject(e.target.value)}
+          style={{ minWidth: 200, maxWidth: 360 }}
+        >
+          <option value="">All Projects</option>
+          {projects.map(p => (
+            <option key={p.key} value={p.key}>{p.display} ({p.sessionCount})</option>
+          ))}
+        </select>
+
+        {err && <span className="err">{err}</span>}
+      </div>
+
+      {activeTab === 'dashboard'
+        ? <DashboardView
+            selectedProject={selectedProject}
+            timeRange={timeRange}
+            projects={projects}
+            navigateToSession={navigateToSession}
+            goHome={goHome}
+          />
+        : <TranscriptView
+            selectedProject={selectedProject}
+            initialSessionId={transcriptSessionId}
+            initialSort={initUrl.sort}
+          />
+      }
     </>
   );
 }

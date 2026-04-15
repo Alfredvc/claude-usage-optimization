@@ -759,6 +759,865 @@ fn build_timeline(conn: &Connection, file_path: &str) -> Result<Value, String> {
     Ok(json!({ "entries": out }))
 }
 
+// ── Dashboard endpoints ───────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct DashboardQ {
+    from: Option<String>,
+    to: Option<String>,
+    project: Option<String>,
+}
+
+fn time_bounds(q: &DashboardQ) -> (String, String) {
+    let from = q
+        .from
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("1900-01-01")
+        .to_owned();
+    let to =
+        q.to.as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("2100-01-01")
+            .to_owned();
+    (from, to)
+}
+
+async fn api_dashboard_summary(
+    State(state): State<AppState>,
+    Query(q): Query<DashboardQ>,
+) -> Response {
+    let (from, to) = time_bounds(&q);
+    let db_path = state.db_path.clone();
+    let result = spawn_blocking(move || -> Result<Value, String> {
+        let conn = open_db(&db_path)?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT \
+                   ROUND(COALESCE(SUM(d.cost_usd), 0.0), 4) AS cost_usd, \
+                   COUNT(DISTINCT CASE WHEN NOT t.is_subagent THEN t.session_id END) AS session_count, \
+                   COUNT(DISTINCT CASE WHEN t.is_subagent THEN t.session_id END) AS subagent_count, \
+                   COUNT(d.entry_id) AS api_call_count \
+                 FROM entries e \
+                 JOIN transcripts t ON t.file_path = e.file_path \
+                 JOIN assistant_entries_deduped d ON d.entry_id = e.entry_id AND d.message_id IS NOT NULL \
+                 WHERE CAST(e.timestamp AS TIMESTAMP) >= CAST(? AS TIMESTAMP) \
+                   AND CAST(e.timestamp AS TIMESTAMP) < CAST(? AS TIMESTAMP)",
+            )
+            .map_err(|e| e.to_string())?;
+        let (cost_usd, session_count, subagent_count, api_call_count) = stmt
+            .query_row([&from, &to], |row| {
+                Ok((
+                    row.get::<_, f64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        let denom = session_count.max(1) as f64;
+        let avg = (cost_usd / denom * 1_000_000.0).round() / 1_000_000.0;
+        Ok(json!({
+            "cost_usd":              cost_usd,
+            "session_count":         session_count,
+            "subagent_count":        subagent_count,
+            "api_call_count":        api_call_count,
+            "avg_cost_per_session":  avg,
+        }))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => err500(e),
+        Err(e) => err500(e),
+    }
+}
+
+async fn api_dashboard_daily(
+    State(state): State<AppState>,
+    Query(q): Query<DashboardQ>,
+) -> Response {
+    let (from, to) = time_bounds(&q);
+    let db_path = state.db_path.clone();
+    let result = spawn_blocking(move || -> Result<Value, String> {
+        let conn = open_db(&db_path)?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT \
+                   CAST(e.timestamp AS DATE)::VARCHAR AS date, \
+                   ROUND(SUM(CASE WHEN d.model ILIKE '%opus%' THEN d.cost_usd ELSE 0.0 END), 4) AS cost_opus, \
+                   ROUND(SUM(CASE WHEN d.model NOT ILIKE '%opus%' AND d.model NOT ILIKE '%haiku%' THEN d.cost_usd ELSE 0.0 END), 4) AS cost_sonnet, \
+                   ROUND(SUM(CASE WHEN d.model ILIKE '%haiku%' THEN d.cost_usd ELSE 0.0 END), 4) AS cost_haiku \
+                 FROM entries e \
+                 JOIN assistant_entries_deduped d ON d.entry_id = e.entry_id AND d.message_id IS NOT NULL \
+                 WHERE CAST(e.timestamp AS TIMESTAMP) >= CAST(? AS TIMESTAMP) \
+                   AND CAST(e.timestamp AS TIMESTAMP) < CAST(? AS TIMESTAMP) \
+                 GROUP BY CAST(e.timestamp AS DATE) \
+                 ORDER BY CAST(e.timestamp AS DATE) ASC",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([&from, &to], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, f64>(1)?,
+                    row.get::<_, f64>(2)?,
+                    row.get::<_, f64>(3)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        let mut out = Vec::new();
+        for r in rows.filter_map(|r| r.ok()) {
+            let (date, cost_opus, cost_sonnet, cost_haiku) = r;
+            out.push(json!({
+                "date":        date,
+                "cost_opus":   cost_opus,
+                "cost_sonnet": cost_sonnet,
+                "cost_haiku":  cost_haiku,
+            }));
+        }
+        Ok(Value::Array(out))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => err500(e),
+        Err(e) => err500(e),
+    }
+}
+
+async fn api_dashboard_models(
+    State(state): State<AppState>,
+    Query(q): Query<DashboardQ>,
+) -> Response {
+    let (from, to) = time_bounds(&q);
+    let db_path = state.db_path.clone();
+    let result = spawn_blocking(move || -> Result<Value, String> {
+        let conn = open_db(&db_path)?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT \
+                   d.model, \
+                   COUNT(DISTINCT e.session_id) AS sessions, \
+                   COUNT(d.entry_id) AS api_calls, \
+                   ROUND(SUM(d.cost_usd), 4) AS cost_usd, \
+                   ROUND(100.0 * SUM(d.cost_usd) / NULLIF(SUM(SUM(d.cost_usd)) OVER (), 0.0), 2) AS pct_spend, \
+                   ROUND(SUM(d.cost_usd) / NULLIF(COUNT(d.entry_id), 0), 6) AS avg_cost_per_turn \
+                 FROM entries e \
+                 JOIN assistant_entries_deduped d ON d.entry_id = e.entry_id AND d.message_id IS NOT NULL \
+                 WHERE CAST(e.timestamp AS TIMESTAMP) >= CAST(? AS TIMESTAMP) \
+                   AND CAST(e.timestamp AS TIMESTAMP) < CAST(? AS TIMESTAMP) \
+                 GROUP BY d.model \
+                 ORDER BY cost_usd DESC",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([&from, &to], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, Option<f64>>(3)?,
+                    row.get::<_, Option<f64>>(4)?,
+                    row.get::<_, Option<f64>>(5)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        let mut out = Vec::new();
+        for r in rows.filter_map(|r| r.ok()) {
+            let (model, sessions, api_calls, cost_usd, pct_spend, avg_cost_per_turn) = r;
+            out.push(json!({
+                "model":             model,
+                "sessions":          sessions,
+                "api_calls":         api_calls,
+                "cost_usd":          cost_usd.unwrap_or(0.0),
+                "pct_spend":         pct_spend.unwrap_or(0.0),
+                "avg_cost_per_turn": avg_cost_per_turn.unwrap_or(0.0),
+            }));
+        }
+        Ok(Value::Array(out))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => err500(e),
+        Err(e) => err500(e),
+    }
+}
+
+async fn api_dashboard_cache(
+    State(state): State<AppState>,
+    Query(q): Query<DashboardQ>,
+) -> Response {
+    let (from, to) = time_bounds(&q);
+    let db_path = state.db_path.clone();
+    let result = spawn_blocking(move || -> Result<Value, String> {
+        let conn = open_db(&db_path)?;
+
+        // global cache stats
+        let mut stmt = conn
+            .prepare(
+                "SELECT \
+                   COALESCE(SUM(d.cache_read_input_tokens), 0) AS cache_read_tokens, \
+                   COALESCE(SUM( \
+                     COALESCE(d.cache_creation_5m, 0) + COALESCE(d.cache_creation_1h, 0) \
+                     + CASE WHEN COALESCE(d.cache_creation_5m, 0) + COALESCE(d.cache_creation_1h, 0) > 0 \
+                            THEN 0 ELSE COALESCE(d.cache_creation_input_tokens, 0) END \
+                   ), 0) AS cache_create_tokens, \
+                   COALESCE(SUM(d.input_tokens), 0) + COALESCE(SUM(d.cache_read_input_tokens), 0) \
+                   + COALESCE(SUM( \
+                     COALESCE(d.cache_creation_5m, 0) + COALESCE(d.cache_creation_1h, 0) \
+                     + CASE WHEN COALESCE(d.cache_creation_5m, 0) + COALESCE(d.cache_creation_1h, 0) > 0 \
+                            THEN 0 ELSE COALESCE(d.cache_creation_input_tokens, 0) END \
+                   ), 0) \
+                   + COALESCE(SUM(d.output_tokens), 0) AS total_tokens \
+                 FROM entries e \
+                 JOIN assistant_entries_deduped d ON d.entry_id = e.entry_id AND d.message_id IS NOT NULL \
+                 WHERE CAST(e.timestamp AS TIMESTAMP) >= CAST(? AS TIMESTAMP) \
+                   AND CAST(e.timestamp AS TIMESTAMP) < CAST(? AS TIMESTAMP)",
+            )
+            .map_err(|e| e.to_string())?;
+        let (cache_read, cache_create, total) = stmt
+            .query_row([&from, &to], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        let denom = total.max(1) as f64;
+        let hit_rate = cache_read as f64 / denom;
+        let create_rate = cache_create as f64 / denom;
+
+        // thrash turns
+        let mut stmt2 = conn
+            .prepare(
+                "SELECT \
+                   d.entry_id, \
+                   t.session_id, \
+                   regexp_extract(t.file_path, '.*/projects/([^/]+)/[^/]+\\.jsonl$', 1) AS project, \
+                   ROUND(COALESCE(d.cost_usd, 0.0), 4) AS cost_usd, \
+                   COALESCE(d.cache_creation_5m, 0) + COALESCE(d.cache_creation_1h, 0) \
+                     + CASE WHEN COALESCE(d.cache_creation_5m, 0) + COALESCE(d.cache_creation_1h, 0) > 0 \
+                            THEN 0 ELSE COALESCE(d.cache_creation_input_tokens, 0) END AS cc_tokens, \
+                   COALESCE(d.output_tokens, 0) AS output_tokens \
+                 FROM entries e \
+                 JOIN transcripts t ON t.file_path = e.file_path \
+                 JOIN assistant_entries_deduped d ON d.entry_id = e.entry_id AND d.message_id IS NOT NULL \
+                 WHERE CAST(e.timestamp AS TIMESTAMP) >= CAST(? AS TIMESTAMP) \
+                   AND CAST(e.timestamp AS TIMESTAMP) < CAST(? AS TIMESTAMP) \
+                   AND COALESCE(d.output_tokens, 0) < 200 \
+                   AND (COALESCE(d.cache_creation_5m, 0) + COALESCE(d.cache_creation_1h, 0) \
+                        + CASE WHEN COALESCE(d.cache_creation_5m, 0) + COALESCE(d.cache_creation_1h, 0) > 0 \
+                               THEN 0 ELSE COALESCE(d.cache_creation_input_tokens, 0) END) > 10000 \
+                 ORDER BY cc_tokens DESC \
+                 LIMIT 10",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt2
+            .query_map([&from, &to], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, f64>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        let mut thrash = Vec::new();
+        for r in rows.filter_map(|r| r.ok()) {
+            let (entry_id, session_id, project, cost_usd, cc_tokens, output_tokens) = r;
+            thrash.push(json!({
+                "entry_id":      entry_id,
+                "session_id":    session_id,
+                "project":       project,
+                "cost_usd":      cost_usd,
+                "cc_tokens":     cc_tokens,
+                "output_tokens": output_tokens,
+            }));
+        }
+
+        Ok(json!({
+            "hit_rate":            hit_rate,
+            "create_rate":         create_rate,
+            "cache_read_tokens":   cache_read,
+            "cache_create_tokens": cache_create,
+            "total_tokens":        total,
+            "thrash_turns":        thrash,
+        }))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => err500(e),
+        Err(e) => err500(e),
+    }
+}
+
+async fn api_dashboard_agents(
+    State(state): State<AppState>,
+    Query(q): Query<DashboardQ>,
+) -> Response {
+    let (from, to) = time_bounds(&q);
+    let db_path = state.db_path.clone();
+    let result = spawn_blocking(move || -> Result<Value, String> {
+        let conn = open_db(&db_path)?;
+
+        // call counts
+        let mut stmt1 = conn
+            .prepare(
+                "SELECT \
+                   COUNT(*) FILTER (WHERE json_extract_string(acb.tool_input, '$.model') IS NOT NULL) AS explicit_calls, \
+                   COUNT(*) FILTER (WHERE json_extract_string(acb.tool_input, '$.model') IS NULL) AS inherited_calls \
+                 FROM assistant_content_blocks acb \
+                 JOIN entries e ON e.entry_id = acb.entry_id \
+                 WHERE acb.block_type = 'tool_use' AND acb.tool_name = 'Agent' \
+                   AND CAST(e.timestamp AS TIMESTAMP) >= CAST(? AS TIMESTAMP) \
+                   AND CAST(e.timestamp AS TIMESTAMP) < CAST(? AS TIMESTAMP)",
+            )
+            .map_err(|e| e.to_string())?;
+        let (explicit_calls, inherited_calls) = stmt1
+            .query_row([&from, &to], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+            })
+            .map_err(|e| e.to_string())?;
+
+        // total subagent cost
+        let mut stmt2 = conn
+            .prepare(
+                "SELECT ROUND(COALESCE(SUM(d.cost_usd), 0.0), 4) \
+                 FROM transcripts t \
+                 JOIN entries e ON e.file_path = t.file_path \
+                 JOIN assistant_entries_deduped d ON d.entry_id = e.entry_id AND d.message_id IS NOT NULL \
+                 WHERE t.is_subagent \
+                   AND CAST(e.timestamp AS TIMESTAMP) >= CAST(? AS TIMESTAMP) \
+                   AND CAST(e.timestamp AS TIMESTAMP) < CAST(? AS TIMESTAMP)",
+            )
+            .map_err(|e| e.to_string())?;
+        let total_subagent_cost: f64 = stmt2
+            .query_row([&from, &to], |row| row.get::<_, f64>(0))
+            .map_err(|e| e.to_string())?;
+
+        let total_agent_calls = explicit_calls + inherited_calls;
+        let total_agent_calls_denom = total_agent_calls.max(1) as f64;
+        let inherited_cost_usd =
+            total_subagent_cost * inherited_calls as f64 / total_agent_calls_denom;
+        let inherited_cost_usd = (inherited_cost_usd * 10_000.0).round() / 10_000.0;
+
+        // subtypes
+        let mut stmt3 = conn
+            .prepare(
+                "SELECT \
+                   COALESCE(json_extract_string(acb.tool_input, '$.subagent_type'), 'general-purpose') AS subtype, \
+                   COUNT(*) AS count \
+                 FROM assistant_content_blocks acb \
+                 JOIN entries e ON e.entry_id = acb.entry_id \
+                 WHERE acb.block_type = 'tool_use' AND acb.tool_name = 'Agent' \
+                   AND CAST(e.timestamp AS TIMESTAMP) >= CAST(? AS TIMESTAMP) \
+                   AND CAST(e.timestamp AS TIMESTAMP) < CAST(? AS TIMESTAMP) \
+                 GROUP BY 1 \
+                 ORDER BY count DESC \
+                 LIMIT 15",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt3
+            .query_map([&from, &to], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .map_err(|e| e.to_string())?;
+        let mut subtypes = Vec::new();
+        for r in rows.filter_map(|r| r.ok()) {
+            let (subtype, count) = r;
+            let cost = total_subagent_cost * count as f64 / total_agent_calls_denom;
+            let cost = (cost * 10_000.0).round() / 10_000.0;
+            subtypes.push(json!({
+                "subtype":  subtype,
+                "count":    count,
+                "cost_usd": cost,
+            }));
+        }
+
+        Ok(json!({
+            "explicit_calls":      explicit_calls,
+            "inherited_calls":     inherited_calls,
+            "inherited_cost_usd":  inherited_cost_usd,
+            "subtypes":            subtypes,
+        }))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => err500(e),
+        Err(e) => err500(e),
+    }
+}
+
+async fn api_dashboard_top_sessions(
+    State(state): State<AppState>,
+    Query(q): Query<DashboardQ>,
+) -> Response {
+    let (from, to) = time_bounds(&q);
+    let db_path = state.db_path.clone();
+    let result = spawn_blocking(move || -> Result<Value, String> {
+        let conn = open_db(&db_path)?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT \
+                   t.session_id, \
+                   regexp_extract(t.file_path, '.*/projects/([^/]+)/[^/]+\\.jsonl$', 1) AS project, \
+                   CAST(t.first_timestamp AS VARCHAR) AS started_at, \
+                   ROUND(COALESCE(SUM(d.cost_usd), 0.0), 4) AS cost_usd, \
+                   COUNT(DISTINCT d.entry_id) AS turn_count, \
+                   COALESCE(( \
+                     SELECT COUNT(*) FROM user_content_blocks ucb2 \
+                     JOIN entries e2 ON e2.entry_id = ucb2.entry_id AND e2.file_path = t.file_path \
+                     WHERE ucb2.is_error = true \
+                   ), 0) AS error_count, \
+                   COALESCE(( \
+                     SELECT COUNT(*) FROM transcripts t2 \
+                     WHERE t2.parent_session_id = t.session_id \
+                   ), 0) AS subagent_count \
+                 FROM transcripts t \
+                 JOIN entries e ON e.file_path = t.file_path \
+                 JOIN assistant_entries_deduped d ON d.entry_id = e.entry_id AND d.message_id IS NOT NULL \
+                 WHERE NOT t.is_subagent \
+                   AND CAST(t.first_timestamp AS TIMESTAMP) >= CAST(? AS TIMESTAMP) \
+                   AND CAST(t.first_timestamp AS TIMESTAMP) < CAST(? AS TIMESTAMP) \
+                 GROUP BY t.session_id, t.file_path, t.first_timestamp \
+                 ORDER BY cost_usd DESC \
+                 LIMIT 15",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([&from, &to], |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, f64>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, i64>(6)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        let mut out = Vec::new();
+        for r in rows.filter_map(|r| r.ok()) {
+            let (session_id, project, started_at, cost_usd, turn_count, error_count, subagent_count) = r;
+            out.push(json!({
+                "session_id":     session_id,
+                "project":        project,
+                "started_at":     started_at,
+                "cost_usd":       cost_usd,
+                "turn_count":     turn_count,
+                "error_count":    error_count,
+                "subagent_count": subagent_count,
+            }));
+        }
+        Ok(Value::Array(out))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => err500(e),
+        Err(e) => err500(e),
+    }
+}
+
+async fn api_dashboard_project_summary(
+    State(state): State<AppState>,
+    Query(q): Query<DashboardQ>,
+) -> Response {
+    let project = q.project.clone().unwrap_or_default();
+    if project.is_empty() {
+        return (StatusCode::BAD_REQUEST, "project required").into_response();
+    }
+    let (from, to) = time_bounds(&q);
+    let db_path = state.db_path.clone();
+    let result = spawn_blocking(move || -> Result<Value, String> {
+        let conn = open_db(&db_path)?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT \
+                   ROUND(COALESCE(SUM(d.cost_usd), 0.0), 4) AS cost_usd, \
+                   COUNT(DISTINCT CASE WHEN NOT t.is_subagent THEN t.session_id END) AS session_count, \
+                   COUNT(DISTINCT CASE WHEN t.is_subagent THEN t.session_id END) AS subagent_count, \
+                   COUNT(d.entry_id) AS api_call_count \
+                 FROM entries e \
+                 JOIN transcripts t ON t.file_path = e.file_path \
+                 JOIN assistant_entries_deduped d ON d.entry_id = e.entry_id AND d.message_id IS NOT NULL \
+                 WHERE regexp_extract(e.file_path, '.*/projects/([^/]+)/[^/]+\\.jsonl$', 1) = ? \
+                   AND CAST(e.timestamp AS TIMESTAMP) >= CAST(? AS TIMESTAMP) \
+                   AND CAST(e.timestamp AS TIMESTAMP) < CAST(? AS TIMESTAMP)",
+            )
+            .map_err(|e| e.to_string())?;
+        let (cost_usd, session_count, subagent_count, api_call_count) = stmt
+            .query_row([&project, &from, &to], |row| {
+                Ok((
+                    row.get::<_, f64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        let denom = session_count.max(1) as f64;
+        let avg = (cost_usd / denom * 1_000_000.0).round() / 1_000_000.0;
+        Ok(json!({
+            "cost_usd":              cost_usd,
+            "session_count":         session_count,
+            "subagent_count":        subagent_count,
+            "api_call_count":        api_call_count,
+            "avg_cost_per_session":  avg,
+        }))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => err500(e),
+        Err(e) => err500(e),
+    }
+}
+
+async fn api_dashboard_session_distribution(
+    State(state): State<AppState>,
+    Query(q): Query<DashboardQ>,
+) -> Response {
+    let project = q.project.clone().unwrap_or_default();
+    if project.is_empty() {
+        return (StatusCode::BAD_REQUEST, "project required").into_response();
+    }
+    let (from, to) = time_bounds(&q);
+    let db_path = state.db_path.clone();
+    let result = spawn_blocking(move || -> Result<Value, String> {
+        let conn = open_db(&db_path)?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT \
+                   bucket, \
+                   COUNT(*) AS session_count, \
+                   ROUND(SUM(session_cost), 4) AS total_cost, \
+                   ROUND(AVG(session_cost), 4) AS avg_cost, \
+                   ROUND(MAX(session_cost), 4) AS max_cost \
+                 FROM ( \
+                   SELECT \
+                     t.session_id, \
+                     COALESCE(SUM(d.cost_usd), 0.0) AS session_cost, \
+                     COUNT(DISTINCT d.entry_id) AS turn_count, \
+                     CASE \
+                       WHEN COUNT(DISTINCT d.entry_id) < 20 THEN '<20' \
+                       WHEN COUNT(DISTINCT d.entry_id) < 100 THEN '20-100' \
+                       WHEN COUNT(DISTINCT d.entry_id) < 500 THEN '100-500' \
+                       WHEN COUNT(DISTINCT d.entry_id) < 2000 THEN '500-2k' \
+                       ELSE '2k+' \
+                     END AS bucket \
+                   FROM transcripts t \
+                   JOIN entries e ON e.file_path = t.file_path \
+                   JOIN assistant_entries_deduped d ON d.entry_id = e.entry_id AND d.message_id IS NOT NULL \
+                   WHERE NOT t.is_subagent \
+                     AND regexp_extract(t.file_path, '.*/projects/([^/]+)/[^/]+\\.jsonl$', 1) = ? \
+                     AND CAST(t.first_timestamp AS TIMESTAMP) >= CAST(? AS TIMESTAMP) \
+                     AND CAST(t.first_timestamp AS TIMESTAMP) < CAST(? AS TIMESTAMP) \
+                   GROUP BY t.session_id \
+                 ) sub \
+                 GROUP BY bucket \
+                 ORDER BY CASE bucket \
+                   WHEN '<20' THEN 1 \
+                   WHEN '20-100' THEN 2 \
+                   WHEN '100-500' THEN 3 \
+                   WHEN '500-2k' THEN 4 \
+                   ELSE 5 \
+                 END",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([&project, &from, &to], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, f64>(2)?,
+                    row.get::<_, f64>(3)?,
+                    row.get::<_, f64>(4)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        let mut out = Vec::new();
+        for r in rows.filter_map(|r| r.ok()) {
+            let (bucket, session_count, total_cost, avg_cost, max_cost) = r;
+            out.push(json!({
+                "bucket":        bucket,
+                "session_count": session_count,
+                "total_cost":    total_cost,
+                "avg_cost":      avg_cost,
+                "max_cost":      max_cost,
+            }));
+        }
+        Ok(Value::Array(out))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => err500(e),
+        Err(e) => err500(e),
+    }
+}
+
+async fn api_dashboard_file_hotspots(
+    State(state): State<AppState>,
+    Query(q): Query<DashboardQ>,
+) -> Response {
+    let project = q.project.clone().unwrap_or_default();
+    if project.is_empty() {
+        return (StatusCode::BAD_REQUEST, "project required").into_response();
+    }
+    let (from, to) = time_bounds(&q);
+    let db_path = state.db_path.clone();
+    let result = spawn_blocking(move || -> Result<Value, String> {
+        let conn = open_db(&db_path)?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT \
+                   json_extract_string(acb.tool_input, '$.file_path') AS file_path, \
+                   COUNT(DISTINCT e.session_id) AS distinct_sessions, \
+                   COUNT(*) AS total_reads \
+                 FROM assistant_content_blocks acb \
+                 JOIN entries e ON e.entry_id = acb.entry_id \
+                 JOIN transcripts t ON t.file_path = e.file_path \
+                 WHERE acb.block_type = 'tool_use' AND acb.tool_name = 'Read' \
+                   AND NOT t.is_subagent \
+                   AND regexp_extract(t.file_path, '.*/projects/([^/]+)/[^/]+\\.jsonl$', 1) = ? \
+                   AND CAST(e.timestamp AS TIMESTAMP) >= CAST(? AS TIMESTAMP) \
+                   AND CAST(e.timestamp AS TIMESTAMP) < CAST(? AS TIMESTAMP) \
+                   AND json_extract_string(acb.tool_input, '$.file_path') IS NOT NULL \
+                   AND json_extract_string(acb.tool_input, '$.file_path') != '' \
+                 GROUP BY file_path \
+                 ORDER BY distinct_sessions DESC \
+                 LIMIT 30",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([&project, &from, &to], |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        let mut out = Vec::new();
+        for r in rows.filter_map(|r| r.ok()) {
+            let (file_path, distinct_sessions, total_reads) = r;
+            out.push(json!({
+                "file_path":         file_path,
+                "distinct_sessions": distinct_sessions,
+                "total_reads":       total_reads,
+            }));
+        }
+        Ok(Value::Array(out))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => err500(e),
+        Err(e) => err500(e),
+    }
+}
+
+async fn api_dashboard_errors(
+    State(state): State<AppState>,
+    Query(q): Query<DashboardQ>,
+) -> Response {
+    let project = q.project.clone().unwrap_or_default();
+    if project.is_empty() {
+        return (StatusCode::BAD_REQUEST, "project required").into_response();
+    }
+    let (from, to) = time_bounds(&q);
+    let db_path = state.db_path.clone();
+    let result = spawn_blocking(move || -> Result<Value, String> {
+        let conn = open_db(&db_path)?;
+
+        // Query A: error types
+        let mut stmt_a = conn
+            .prepare(
+                "SELECT \
+                   CASE \
+                     WHEN tool_result_content::TEXT ILIKE '%permission denied%' \
+                       OR tool_result_content::TEXT ILIKE '%Operation not permitted%' THEN 'permission_denied' \
+                     WHEN tool_result_content::TEXT ILIKE '%No such file%' \
+                       OR tool_result_content::TEXT ILIKE '%not found%' \
+                       OR tool_result_content::TEXT ILIKE '%does not exist%' THEN 'no_such_file' \
+                     WHEN tool_result_content::TEXT ILIKE '%timeout%' \
+                       OR tool_result_content::TEXT ILIKE '%timed out%' THEN 'timeout' \
+                     WHEN tool_result_content::TEXT ILIKE '%tool_use_error%' \
+                       OR tool_result_content::TEXT ILIKE '%ToolUseError%' THEN 'tool_use_error' \
+                     ELSE 'other' \
+                   END AS error_type, \
+                   COUNT(*) AS count, \
+                   COUNT(DISTINCT e.session_id) AS sessions_affected \
+                 FROM user_content_blocks ucb \
+                 JOIN entries e ON e.entry_id = ucb.entry_id \
+                 JOIN transcripts t ON t.file_path = e.file_path \
+                 WHERE ucb.is_error = true \
+                   AND NOT t.is_subagent \
+                   AND regexp_extract(t.file_path, '.*/projects/([^/]+)/[^/]+\\.jsonl$', 1) = ? \
+                   AND CAST(e.timestamp AS TIMESTAMP) >= CAST(? AS TIMESTAMP) \
+                   AND CAST(e.timestamp AS TIMESTAMP) < CAST(? AS TIMESTAMP) \
+                 GROUP BY error_type \
+                 ORDER BY count DESC",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows_a = stmt_a
+            .query_map([&project, &from, &to], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        let mut types = Vec::new();
+        for r in rows_a.filter_map(|r| r.ok()) {
+            let (error_type, count, sessions_affected) = r;
+            types.push(json!({
+                "error_type":        error_type,
+                "count":             count,
+                "sessions_affected": sessions_affected,
+            }));
+        }
+
+        // Query B1: session costs
+        let mut stmt_b1 = conn
+            .prepare(
+                "SELECT \
+                   t.session_id, \
+                   COALESCE(SUM(d.cost_usd), 0.0) AS session_cost, \
+                   COUNT(DISTINCT d.entry_id) AS turn_count \
+                 FROM transcripts t \
+                 JOIN entries e ON e.file_path = t.file_path \
+                 JOIN assistant_entries_deduped d ON d.entry_id = e.entry_id AND d.message_id IS NOT NULL \
+                 WHERE NOT t.is_subagent \
+                   AND regexp_extract(t.file_path, '.*/projects/([^/]+)/[^/]+\\.jsonl$', 1) = ? \
+                   AND CAST(t.first_timestamp AS TIMESTAMP) >= CAST(? AS TIMESTAMP) \
+                   AND CAST(t.first_timestamp AS TIMESTAMP) < CAST(? AS TIMESTAMP) \
+                 GROUP BY t.session_id",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows_b1 = stmt_b1
+            .query_map([&project, &from, &to], |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, f64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        let mut session_cost: HashMap<String, (f64, i64)> = HashMap::new();
+        for r in rows_b1.filter_map(|r| r.ok()) {
+            let (sid, cost, turns) = r;
+            if let Some(s) = sid {
+                session_cost.insert(s, (cost, turns));
+            }
+        }
+
+        // Query B2: session error counts
+        let mut stmt_b2 = conn
+            .prepare(
+                "SELECT \
+                   t.session_id, \
+                   COUNT(*) AS error_count \
+                 FROM transcripts t \
+                 JOIN entries e ON e.file_path = t.file_path \
+                 JOIN user_content_blocks ucb ON ucb.entry_id = e.entry_id \
+                 WHERE ucb.is_error = true \
+                   AND NOT t.is_subagent \
+                   AND regexp_extract(t.file_path, '.*/projects/([^/]+)/[^/]+\\.jsonl$', 1) = ? \
+                   AND CAST(t.first_timestamp AS TIMESTAMP) >= CAST(? AS TIMESTAMP) \
+                   AND CAST(t.first_timestamp AS TIMESTAMP) < CAST(? AS TIMESTAMP) \
+                 GROUP BY t.session_id",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows_b2 = stmt_b2
+            .query_map([&project, &from, &to], |row| {
+                Ok((row.get::<_, Option<String>>(0)?, row.get::<_, i64>(1)?))
+            })
+            .map_err(|e| e.to_string())?;
+        let mut session_errors: HashMap<String, i64> = HashMap::new();
+        for r in rows_b2.filter_map(|r| r.ok()) {
+            let (sid, ec) = r;
+            if let Some(s) = sid {
+                session_errors.insert(s, ec);
+            }
+        }
+
+        // Bucket and aggregate
+        fn bucket_for(err: i64) -> &'static str {
+            if err == 0 {
+                "0 errors"
+            } else if err < 10 {
+                "1-9"
+            } else if err < 50 {
+                "10-49"
+            } else {
+                "50+"
+            }
+        }
+
+        // bucket -> (sessions, total_cost, total_turns, total_errors)
+        let mut buckets: HashMap<&'static str, (i64, f64, i64, i64)> = HashMap::new();
+        for (sid, (cost, turns)) in &session_cost {
+            let err = *session_errors.get(sid).unwrap_or(&0);
+            let b = bucket_for(err);
+            let entry = buckets.entry(b).or_insert((0, 0.0, 0, 0));
+            entry.0 += 1;
+            entry.1 += cost;
+            entry.2 += turns;
+            entry.3 += err;
+        }
+
+        let order = ["0 errors", "1-9", "10-49", "50+"];
+        let mut by_bucket = Vec::new();
+        for label in &order {
+            if let Some((sessions, total_cost, total_turns, total_errors)) = buckets.get(*label) {
+                let turns_denom = (*total_turns).max(1) as f64;
+                let avg_cost_per_turn =
+                    ((total_cost / turns_denom) * 1_000_000.0).round() / 1_000_000.0;
+                let errors_per_turn =
+                    ((*total_errors as f64 / turns_denom) * 1_000_000.0).round() / 1_000_000.0;
+                by_bucket.push(json!({
+                    "bucket":            label,
+                    "sessions":          sessions,
+                    "avg_cost_per_turn": avg_cost_per_turn,
+                    "errors_per_turn":   errors_per_turn,
+                }));
+            }
+        }
+
+        Ok(json!({
+            "types":     types,
+            "by_bucket": by_bucket,
+        }))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => err500(e),
+        Err(e) => err500(e),
+    }
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 pub async fn run(args: ServeArgs) {
@@ -775,6 +1634,28 @@ pub async fn run(args: ServeArgs) {
         .route("/api/sessions", get(api_sessions))
         .route("/api/transcript", get(api_transcript))
         .route("/api/subagent", get(api_subagent))
+        .route("/api/dashboard/summary", get(api_dashboard_summary))
+        .route("/api/dashboard/daily", get(api_dashboard_daily))
+        .route("/api/dashboard/models", get(api_dashboard_models))
+        .route("/api/dashboard/cache", get(api_dashboard_cache))
+        .route("/api/dashboard/agents", get(api_dashboard_agents))
+        .route(
+            "/api/dashboard/top-sessions",
+            get(api_dashboard_top_sessions),
+        )
+        .route(
+            "/api/dashboard/project-summary",
+            get(api_dashboard_project_summary),
+        )
+        .route(
+            "/api/dashboard/session-distribution",
+            get(api_dashboard_session_distribution),
+        )
+        .route(
+            "/api/dashboard/file-hotspots",
+            get(api_dashboard_file_hotspots),
+        )
+        .route("/api/dashboard/errors", get(api_dashboard_errors))
         .with_state(state);
 
     let addr = format!("127.0.0.1:{port}");
