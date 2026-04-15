@@ -84,6 +84,12 @@ pub enum Entry {
 
     #[serde(rename = "speculation-accept")]
     SpeculationAccept(SpeculationAcceptEntry),
+
+    /// Catch-all for entry types not yet recognised by the ingest binary.
+    /// Allows forward-compatible parsing: new Claude Code entry types in
+    /// the JSONL will be silently skipped rather than aborting ingest.
+    #[serde(other)]
+    Unknown,
 }
 
 // ---------------------------------------------------------------------------

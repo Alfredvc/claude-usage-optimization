@@ -234,6 +234,10 @@ pub fn parse_file(path: &Path, pricing: &HashMap<String, PriceRow>) -> ParsedFil
             }
         };
 
+        if matches!(entry, Entry::Unknown) {
+            continue;
+        }
+
         match build_rows(
             &entry,
             line_no as i64,
@@ -384,6 +388,7 @@ fn entry_type_and_subtype(e: &Entry) -> (&'static str, Option<String>) {
         Entry::ContextCollapseCommit(_) => ("marble-origami-commit", None),
         Entry::ContextCollapseSnapshot(_) => ("marble-origami-snapshot", None),
         Entry::SpeculationAccept(_) => ("speculation-accept", None),
+        Entry::Unknown => unreachable!("Unknown entries are skipped before build_rows"),
     }
 }
 
@@ -656,6 +661,7 @@ fn build_variant(
             )),
             vec![],
         )),
+        Entry::Unknown => unreachable!("Unknown entries are skipped before build_rows"),
     }
 }
 
