@@ -11,28 +11,32 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use chrono::Utc;
 use crossbeam_channel::bounded;
 use duckdb::types::{TimeUnit, ValueRef};
-use duckdb::{Connection, ToSql, appender_params_from_iter, params};
-use chrono::Utc;
+use duckdb::{appender_params_from_iter, params, Connection, ToSql};
 use rayon::prelude::*;
 use serde_json::Value;
 use walkdir::WalkDir;
 
-use crate::cli::Cli;
-use crate::parse::{ParsedFile, parse_file};
-use crate::pricing::{self, PriceRow, build_lookup, merge, seed_rows};
+use crate::cli::IngestArgs;
+use crate::parse::{parse_file, ParsedFile};
+use crate::pricing::{self, build_lookup, merge, seed_rows, PriceRow};
 use crate::schema::{
     COMMENTS_DDL, DEDUPED_VIEW_DDL, INDEXES_DDL, PK_DDL, SCHEMA_DDL, TOOL_USES_VIEW_DDL,
 };
 
-pub fn run(cli: Cli) -> ! {
+pub fn run(cli: IngestArgs) -> ! {
     let started = Instant::now();
-    let jobs = if cli.jobs == 0 { num_cpus_or(4) } else { cli.jobs };
+    let jobs = if cli.jobs == 0 {
+        num_cpus_or(4)
+    } else {
+        cli.jobs
+    };
 
     rayon::ThreadPoolBuilder::new()
         .num_threads(jobs)
@@ -336,7 +340,9 @@ impl<'a> ToSql for Cell<'a> {
             Cell::Ts(v) => match v {
                 Value::Null => ToSqlOutput::Borrowed(ValueRef::Null),
                 Value::String(s) => match parse_ts_micros(s) {
-                    Some(us) => ToSqlOutput::Borrowed(ValueRef::Timestamp(TimeUnit::Microsecond, us)),
+                    Some(us) => {
+                        ToSqlOutput::Borrowed(ValueRef::Timestamp(TimeUnit::Microsecond, us))
+                    }
                     None => ToSqlOutput::Borrowed(ValueRef::Null),
                 },
                 _ => ToSqlOutput::Borrowed(ValueRef::Null),
@@ -407,11 +413,7 @@ fn ts_cols(table: &str) -> &'static [usize] {
     }
 }
 
-fn append_row(
-    app: &mut duckdb::Appender<'_>,
-    row: &[Value],
-    ts: &[usize],
-) -> Result<(), String> {
+fn append_row(app: &mut duckdb::Appender<'_>, row: &[Value], ts: &[usize]) -> Result<(), String> {
     app.append_row(appender_params_from_iter(row.iter().enumerate().map(
         |(i, v)| {
             if ts.contains(&i) {

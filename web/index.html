@@ -1,0 +1,722 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Claude Usage Visualizer</title>
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --surface2: #1c2128;
+      --border: #30363d;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --accent: #58a6ff;
+      --radius: 6px;
+      --tok-input: #3b82f6;
+      --tok-cr:    #22c55e;
+      --tok-cw:    #f59e0b;
+      --tok-out:   #a855f7;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', monospace; font-size: 13px; }
+    #root { display: flex; flex-direction: column; height: 100vh; }
+
+    /* ── Header ── */
+    .header {
+      display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+      padding: 10px 16px; background: var(--surface); border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .header label { color: var(--muted); font-size: 11px; white-space: nowrap; }
+    .header select {
+      background: var(--surface2); color: var(--text); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 5px 8px; font-size: 12px;
+    }
+    .header select:focus { outline: 1px solid var(--accent); }
+    .sort-group { display: flex; gap: 2px; }
+    .sort-btn {
+      background: var(--surface2); color: var(--muted); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 4px 9px; font-size: 11px; cursor: pointer;
+    }
+    .sort-btn.active { background: var(--accent); color: #0d1117; border-color: var(--accent); font-weight: 600; }
+    .btn {
+      background: var(--accent); color: #0d1117; border: none; border-radius: var(--radius);
+      padding: 5px 14px; font-size: 12px; font-weight: 600; cursor: pointer;
+    }
+    .btn:hover { opacity: 0.85; }
+    .sep { color: var(--border); }
+
+    /* ── Session totals ── */
+    .totals {
+      display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+      padding: 5px 16px; background: var(--surface2); border-bottom: 1px solid var(--border);
+      font-size: 11px; flex-shrink: 0;
+    }
+    .totals-badge { display: flex; align-items: center; gap: 4px; }
+    .t-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+
+    /* ── Timeline ── */
+    .timeline { flex: 1; overflow-y: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 6px; }
+
+    /* ── Cards ── */
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; }
+    .card-user   { border-left: 3px solid var(--accent); }
+    .card-api    { border-left: 3px solid #484f58; }
+    .card-tool   { border-left: 3px solid #21262d; margin-left: 20px; background: var(--surface2); }
+    .card-subagent { margin-left: 20px; border: 1px dashed var(--border); background: #111820; }
+
+    /* User */
+    .user-header { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+    .user-text { white-space: pre-wrap; word-break: break-word; line-height: 1.5; font-size: 12px; }
+
+    /* API call */
+    .api-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+    .api-num   { font-weight: 600; color: var(--muted); font-size: 11px; }
+    .api-model { color: var(--muted); font-size: 10px; }
+    .api-cost  { color: #7ee787; font-size: 11px; font-weight: 600; }
+
+    /* Bars */
+    .bars { display: flex; flex-direction: column; gap: 3px; margin-bottom: 6px; }
+    .bar-row { display: flex; align-items: center; gap: 6px; }
+    .bar-label { font-size: 9px; color: var(--muted); width: 28px; text-align: right; flex-shrink: 0; }
+    .bar-track { flex: 1; height: 9px; background: #21262d; border-radius: 2px; overflow: hidden; }
+    .bar-fill { height: 100%; display: flex; }
+    .bar-seg { height: 100%; }
+    .bar-value { font-size: 10px; color: var(--muted); white-space: nowrap; width: 60px; }
+
+    /* Token stats row */
+    .tok-stats { display: flex; gap: 10px; font-size: 10px; color: var(--muted); margin-bottom: 6px; flex-wrap: wrap; }
+    .tok-stat { display: flex; align-items: center; gap: 3px; }
+    .tok-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+
+    /* Content pills */
+    .pills { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+    .pill {
+      display: inline-flex; align-items: center; gap: 3px;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 10px; padding: 2px 7px; font-size: 11px; color: var(--muted);
+    }
+    .pill.tool { color: #7ee787; border-color: #238636; }
+    .pill.think { color: #d2a8ff; border-color: #6e40c9; }
+    .pill.txt { color: var(--text); cursor: pointer; }
+    .pill.txt:hover { border-color: var(--accent); }
+
+    /* Tool result */
+    .tool-header { display: flex; align-items: center; gap: 5px; margin-bottom: 4px; }
+    .tool-name { color: #7ee787; font-size: 11px; font-weight: 500; }
+    .tool-content { color: var(--muted); font-size: 11px; white-space: pre-wrap; word-break: break-word; line-height: 1.4; }
+
+    /* Subagent */
+    .subagent-hdr { display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 8px 10px; border-radius: var(--radius); }
+    .subagent-hdr:hover { background: rgba(255,255,255,.03); }
+    .subagent-badge { font-size: 9px; color: var(--muted); background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; padding: 1px 5px; }
+    .subagent-desc { color: var(--text); font-size: 12px; font-weight: 500; }
+    .subagent-cost { color: #7ee787; font-size: 10px; }
+    .subagent-body { padding: 0 10px 10px; display: flex; flex-direction: column; gap: 5px; }
+
+    /* Copy button */
+    .copy-btn {
+      background: none; border: none; cursor: pointer; color: var(--muted);
+      font-size: 11px; padding: 0 2px; line-height: 1; flex-shrink: 0;
+      opacity: 0.45; transition: opacity 0.1s, color 0.1s;
+    }
+    .copy-btn:hover { opacity: 1; }
+    .copy-btn.copied { color: #7ee787; opacity: 1; }
+
+    /* Misc */
+    .expand-btn { background: none; border: none; color: var(--accent); cursor: pointer; font-size: 11px; padding: 0 2px; text-decoration: underline; }
+    .empty { display: flex; align-items: center; justify-content: center; flex: 1; color: var(--muted); }
+    .legend { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 5px 16px; background: var(--bg); border-top: 1px solid var(--border); flex-shrink: 0; font-size: 10px; color: var(--muted); }
+    .leg-item { display: flex; align-items: center; gap: 4px; }
+    .leg-swatch { width: 8px; height: 8px; border-radius: 2px; }
+    .err { color: #f85149; font-size: 11px; }
+
+    /* ── Expandable cards ── */
+    .card-clickable { cursor: pointer; }
+    .card-clickable:hover { border-color: rgba(88,166,255,0.25); }
+    .expand-chevron { margin-left: auto; color: var(--muted); font-size: 10px; flex-shrink: 0; }
+    .card-preview { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .summary-row { display: flex; gap: 8px; align-items: center; font-size: 10px; color: var(--muted); flex-wrap: wrap; margin-top: 4px; }
+    .summary-badge { display: inline-flex; align-items: center; gap: 2px; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useCallback, useMemo, useRef } = React;
+
+// ── Pricing (USD / million tokens) — used for cost bar color breakdown only ──
+const PRICES = {
+  opus:   [15.00, 1.50, 18.75, 75.00],
+  sonnet: [3.00,  0.30,  3.75, 15.00],
+  haiku:  [0.80,  0.08,  1.00,  4.00],
+};
+
+function modelTier(model = '') {
+  const m = model.toLowerCase();
+  if (m.includes('opus'))  return PRICES.opus;
+  if (m.includes('haiku')) return PRICES.haiku;
+  return PRICES.sonnet;
+}
+
+function computeCost(usage, model = '') {
+  const p = modelTier(model);
+  const { input, cr, cw, out } = usage;
+  const costInput = input * p[0] / 1e6;
+  const costCr    = cr    * p[1] / 1e6;
+  const costCw    = cw    * p[2] / 1e6;
+  const costOut   = out   * p[3] / 1e6;
+  return { costInput, costCr, costCw, costOut, total: costInput + costCr + costCw + costOut };
+}
+
+// ── Extract usage from flat DB fields ─────────────────────────────────────────
+function getUsage(item) {
+  const input = item.input_tokens || 0;
+  const cr    = item.cache_read_input_tokens || 0;
+  const cw    = item.cache_creation_input_tokens || 0;
+  const out   = item.output_tokens || 0;
+  return { input, cr, cw, out, total: input + cr + cw + out };
+}
+
+// ── Formatting ─────────────────────────────────────────────────────────────
+const fmtTok  = n => n >= 1e6 ? `${(n/1e6).toFixed(2)}M` : n >= 1000 ? `${(n/1000).toFixed(1)}K` : String(n);
+const fmtDate = ts => ts ? new Date(ts).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '?';
+
+function fmtCost(c) {
+  if (!c || c === 0) return '$0.00';
+  if (c >= 1)    return `$${c.toFixed(2)}`;
+  if (c >= 0.01) return `$${c.toFixed(3)}`;
+  return `$${c.toFixed(4)}`;
+}
+
+// ── TruncText ──────────────────────────────────────────────────────────────
+function TruncText({ text, limit = 200, className = '' }) {
+  const [expanded, setExpanded] = useState(false);
+  if (!text) return null;
+  const short = text.length > limit;
+  return (
+    <span className={className}>
+      {(!short || expanded) ? text : text.slice(0, limit) + '…'}
+      {short && <button className="expand-btn" onClick={() => setExpanded(e => !e)}>{expanded ? ' less' : ' more'}</button>}
+    </span>
+  );
+}
+
+// ── Token + Cost bars ──────────────────────────────────────────────────────
+const TOK_SEGS = [
+  { key: 'input', color: 'var(--tok-input)',  label: 'input' },
+  { key: 'cr',    color: 'var(--tok-cr)',     label: 'cache read' },
+  { key: 'cw',    color: 'var(--tok-cw)',     label: 'cache write' },
+  { key: 'out',   color: 'var(--tok-out)',    label: 'output' },
+];
+
+function DualBars({ usage, model, maxCost, costUsd }) {
+  const M1 = 1_000_000;
+  const tokPct = Math.min(100, (usage.total / M1) * 100);
+  const cost = useMemo(() => computeCost(usage, model), [usage, model]);
+  const displayCost = costUsd != null ? costUsd : cost.total;
+  const costPct = maxCost > 0 ? Math.min(100, (displayCost / maxCost) * 100) : 0;
+  const tokSegs = TOK_SEGS.map(s => ({ ...s, val: usage[s.key] || 0 })).filter(s => s.val > 0);
+  const costSegsRaw = [
+    { key: 'input', val: cost.costInput, color: 'var(--tok-input)' },
+    { key: 'cr',    val: cost.costCr,    color: 'var(--tok-cr)' },
+    { key: 'cw',    val: cost.costCw,    color: 'var(--tok-cw)' },
+    { key: 'out',   val: cost.costOut,   color: 'var(--tok-out)' },
+  ].filter(s => s.val > 0);
+  const tokTitle = tokSegs.map(s => `${s.label}: ${s.val.toLocaleString()}`).join(' | ') + ` | total: ${usage.total.toLocaleString()}`;
+  const costTitle = `input: ${fmtCost(cost.costInput)} | cache read: ${fmtCost(cost.costCr)} | cache write: ${fmtCost(cost.costCw)} | output: ${fmtCost(cost.costOut)} | total: ${fmtCost(displayCost)}`;
+  return (
+    <div className="bars">
+      <div className="bar-row">
+        <span className="bar-label" style={{ fontSize: 9 }}>tok</span>
+        <div className="bar-track" title={tokTitle}>
+          <div className="bar-fill" style={{ width: `${tokPct}%` }}>
+            {tokSegs.map(s => <div key={s.key} className="bar-seg" style={{ flex: s.val, background: s.color }} />)}
+          </div>
+        </div>
+        <span className="bar-value">{fmtTok(usage.total)}</span>
+      </div>
+      <div className="bar-row">
+        <span className="bar-label" style={{ fontSize: 9 }}>cost</span>
+        <div className="bar-track" title={costTitle}>
+          <div className="bar-fill" style={{ width: `${costPct}%` }}>
+            {costSegsRaw.map(s => <div key={s.key} className="bar-seg" style={{ flex: s.val, background: s.color }} />)}
+          </div>
+        </div>
+        <span className="bar-value" style={{ color: '#7ee787' }}>{fmtCost(displayCost)}</span>
+      </div>
+    </div>
+  );
+}
+
+// ── UserCard ───────────────────────────────────────────────────────────────
+function UserCard({ item }) {
+  const [expanded, setExpanded] = useState(false);
+  const firstLine = item.text.split('\n')[0];
+  const preview = firstLine.length > 120 ? firstLine.slice(0, 120) + '…' : firstLine;
+  return (
+    <div className="card card-user card-clickable" onClick={() => setExpanded(e => !e)}>
+      <div className="user-header">
+        <span style={{ color: 'var(--accent)' }}>👤</span>
+        <span style={{ fontWeight: 600, fontSize: 11, color: 'var(--accent)' }}>User</span>
+        {item.timestamp && <span style={{ color: 'var(--muted)', fontSize: 10 }}>{new Date(item.timestamp).toLocaleTimeString()}</span>}
+        <span className="expand-chevron">{expanded ? '▲' : '▼'}</span>
+      </div>
+      {expanded
+        ? <div className="user-text">{item.text}</div>
+        : <div className="card-preview">{preview}</div>
+      }
+    </div>
+  );
+}
+
+// ── ApiCard ────────────────────────────────────────────────────────────────
+function ApiCard({ item, maxCost, sessionId }) {
+  const [expanded, setExpanded] = useState(false);
+  const usage = useMemo(() => getUsage(item), [item]);
+  const shortModel = item.model ? item.model.replace('claude-', '').replace(/-\d{8}$/, '') : '';
+  const toolUses = item.tool_uses || [];
+  const texts = item.texts || [];
+  const hasDetails = texts.length > 0 || toolUses.length > 0;
+  return (
+    <div className="card card-api" style={hasDetails ? { cursor: 'pointer' } : {}} onClick={hasDetails ? () => setExpanded(e => !e) : undefined}>
+      <div className="api-header">
+        <span className="api-num">API #{item.num}</span>
+        <span className="api-cost">{fmtCost(item.cost_usd)}</span>
+        {shortModel && <span className="api-model">{shortModel}</span>}
+        {item.timestamp && <span style={{ color: 'var(--muted)', fontSize: 10 }}>{new Date(item.timestamp).toLocaleTimeString()}</span>}
+        {hasDetails && <span className="expand-chevron">{expanded ? '▲' : '▼'}</span>}
+      </div>
+      <DualBars usage={usage} model={item.model} maxCost={maxCost} costUsd={item.cost_usd} />
+      <div className="tok-stats">
+        {[
+          { label: 'in', val: usage.input, color: 'var(--tok-input)' },
+          { label: 'cr', val: usage.cr,    color: 'var(--tok-cr)' },
+          { label: 'cw', val: usage.cw,    color: 'var(--tok-cw)' },
+          { label: 'out',val: usage.out,   color: 'var(--tok-out)' },
+        ].filter(s => s.val > 0).map(s => (
+          <span key={s.label} className="tok-stat">
+            <span className="tok-dot" style={{ background: s.color }} />
+            {s.label}:{fmtTok(s.val)}
+          </span>
+        ))}
+      </div>
+      <div className="pills" onClick={ev => ev.stopPropagation()}>
+        {item.has_thinking && <span className="pill think">💭 thinking</span>}
+        {texts.map((t, i) => (
+          <span key={i} className="pill txt"
+            style={{ maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+            title={t}>
+            💬 {t.slice(0, 40)}{t.length > 40 ? '…' : ''}
+          </span>
+        ))}
+        {toolUses.map(tu => (
+          <span key={tu.id} className="pill tool">🔧 {tu.summary || tu.name}</span>
+        ))}
+      </div>
+      {expanded && (
+        <div onClick={ev => ev.stopPropagation()}>
+          {texts.map((t, i) => (
+            <div key={i} style={{ marginTop: 6, padding: '6px 8px', background: 'var(--surface2)', borderRadius: 4, fontSize: 11, color: 'var(--text)', whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 280, overflow: 'auto' }}>
+              {t}
+            </div>
+          ))}
+          {toolUses.map((tu, i) =>
+            tu.agent_id
+              ? <SubagentCard key={i} item={tu} sessionId={sessionId} />
+              : <ToolResultCard key={i} item={tu} startExpanded={true} />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── ToolResultCard ─────────────────────────────────────────────────────────
+function ToolResultCard({ item, startExpanded = false }) {
+  const [expanded, setExpanded] = useState(startExpanded);
+  const content = item.result || '';
+  const preview = content.replace(/\n/g, ' ').slice(0, 80);
+  return (
+    <div className="card card-tool card-clickable" onClick={() => setExpanded(e => !e)}>
+      <div className="tool-header">
+        <span style={{ color: 'var(--muted)' }}>↳</span>
+        <span className="tool-name">{item.name}</span>
+        {!expanded && preview && <span className="card-preview" style={{ flex: 1 }}>{preview}{content.length > 80 ? '…' : ''}</span>}
+        <span className="expand-chevron">{expanded ? '▲' : '▼'}</span>
+      </div>
+      {expanded && (
+        <TruncText text={content || '(empty)'} limit={2000} className="tool-content" />
+      )}
+    </div>
+  );
+}
+
+// ── SubagentCard ───────────────────────────────────────────────────────────
+function SubagentCard({ item, sessionId }) {
+  const [open, setOpen] = useState(false);
+  const [timeline, setTimeline] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const desc = item.input?.description || 'Agent';
+  const agentType = item.input?.subagent_type || '';
+
+  const toggle = useCallback(async () => {
+    if (!open && !timeline) {
+      setLoading(true); setErr(null);
+      try {
+        const r = await fetch(`/api/subagent?session=${encodeURIComponent(sessionId)}&agent=${encodeURIComponent(item.agent_id)}`);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const data = await r.json();
+        setTimeline(data.entries || []);
+      } catch (e) { setErr(e.message); }
+      setLoading(false);
+    }
+    setOpen(o => !o);
+  }, [open, timeline, sessionId, item.agent_id]);
+
+  const apiItems = useMemo(() => (timeline || []).filter(i => i.kind === 'assistant'), [timeline]);
+  const maxCost  = useMemo(() => Math.max(1e-9, ...apiItems.map(i => i.cost_usd || 0)), [apiItems]);
+  const totals   = useMemo(() => {
+    const zero = { input: 0, cr: 0, cw: 0, out: 0, total: 0 };
+    return apiItems.reduce((a, i) => {
+      const u = getUsage(i);
+      return { input: a.input+u.input, cr: a.cr+u.cr, cw: a.cw+u.cw, out: a.out+u.out, total: a.total+u.total };
+    }, zero);
+  }, [apiItems]);
+  const totalCost = useMemo(() => apiItems.reduce((s, i) => s + (i.cost_usd || 0), 0), [apiItems]);
+
+  return (
+    <div className="card card-subagent">
+      <div className="subagent-hdr" onClick={toggle}>
+        <span style={{ color: 'var(--muted)', fontSize: 10 }}>{open ? '▼' : '▶'}</span>
+        <span className="subagent-desc">{desc}</span>
+        {agentType && <span className="subagent-badge">{agentType}</span>}
+        {loading && <span style={{ color: 'var(--muted)', fontSize: 10 }}>loading…</span>}
+        <span style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center', fontSize: 10, color: 'var(--muted)' }}>
+          {totals.total > 0 && <span>{fmtTok(totals.total)} tok</span>}
+          {totalCost > 0 && <span className="subagent-cost">{fmtCost(totalCost)}</span>}
+        </span>
+      </div>
+      {open && (
+        <div className="subagent-body">
+          {err && <div className="err">Error: {err}</div>}
+          {timeline && timeline.map((it, idx) => renderItem(it, idx, maxCost, sessionId))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── CostChart ──────────────────────────────────────────────────────────────
+function CostChart({ apiItems }) {
+  if (apiItems.length < 2) return null;
+
+  const points = useMemo(() => {
+    let cum = 0;
+    return apiItems.map((item, i) => {
+      const delta = item.cost_usd || 0;
+      cum += delta;
+      const toolUses = item.tool_uses || [];
+      const activity = toolUses.length > 0
+        ? toolUses.map(tu => tu.name).join('+')
+        : item.has_thinking ? 'Thinking' : 'Text';
+      return { cum, delta, activity, num: i + 1, item };
+    });
+  }, [apiItems]);
+
+  const maxCum = points[points.length - 1].cum;
+  const n = points.length;
+  const PAD = { t: 4, r: 4, b: 4, l: 4 };
+  const W = 1000, H = 50;
+  const iW = W - PAD.l - PAD.r;
+  const iH = H - PAD.t - PAD.b;
+
+  const x = i => PAD.l + (n > 1 ? (i / (n - 1)) * iW : iW / 2);
+  const y = v => PAD.t + (maxCum > 0 ? (1 - v / maxCum) : 1) * iH;
+
+  const linePts = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(p.cum).toFixed(1)}`).join('');
+  const areaPts = `${linePts}L${x(n-1).toFixed(1)},${(PAD.t+iH).toFixed(1)}L${x(0).toFixed(1)},${(PAD.t+iH).toFixed(1)}Z`;
+
+  const dotColor = p => {
+    const toolUses = p.item.tool_uses || [];
+    if (toolUses.length > 0) return '#7ee787';
+    if (p.item.has_thinking) return '#d2a8ff';
+    return '#58a6ff';
+  };
+
+  return (
+    <div style={{ padding: '5px 16px 0', background: 'var(--surface2)', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontSize: 9, color: 'var(--muted)', marginBottom: 2 }}>
+        <span>Cumulative cost · <strong style={{ color: '#7ee787' }}>{fmtCost(maxCum)}</strong></span>
+        <span style={{ display: 'flex', gap: 8 }}>
+          <span><span style={{ color: '#7ee787' }}>●</span> tool</span>
+          <span><span style={{ color: '#d2a8ff' }}>●</span> think</span>
+          <span><span style={{ color: '#58a6ff' }}>●</span> text</span>
+        </span>
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 55, display: 'block' }} preserveAspectRatio="none">
+        <path d={areaPts} fill="var(--accent)" fillOpacity={0.07} />
+        <path d={linePts} fill="none" stroke="var(--accent)" strokeWidth={1.5} />
+        {points.map((p, i) => (
+          <circle key={i} cx={x(i)} cy={y(p.cum)} r={3.5} fill={dotColor(p)}>
+            <title>{`API #${p.num}: +${fmtCost(p.delta)} → ${fmtCost(p.cum)} | ${p.activity}`}</title>
+          </circle>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
+// ── ActivityBreakdown ──────────────────────────────────────────────────────
+function ActivityBreakdown({ timeline }) {
+  const apiItems = useMemo(() => timeline.filter(i => i.kind === 'assistant'), [timeline]);
+
+  const breakdown = useMemo(() => {
+    const map = {};
+    for (const item of apiItems) {
+      const cost = item.cost_usd || 0;
+      const toolUses = item.tool_uses || [];
+      if (toolUses.length > 0) {
+        const uniqueTools = [...new Set(toolUses.map(tu => tu.name))];
+        const share = cost / uniqueTools.length;
+        for (const toolName of uniqueTools) {
+          if (!map[toolName]) map[toolName] = { cost: 0, calls: 0 };
+          map[toolName].cost += share;
+          map[toolName].calls += toolUses.filter(tu => tu.name === toolName).length;
+        }
+      } else if (item.has_thinking) {
+        if (!map['Thinking']) map['Thinking'] = { cost: 0, calls: 0 };
+        map['Thinking'].cost += cost;
+        map['Thinking'].calls += 1;
+      } else {
+        if (!map['Text']) map['Text'] = { cost: 0, calls: 0 };
+        map['Text'].cost += cost;
+        map['Text'].calls += 1;
+      }
+    }
+    const total = Object.values(map).reduce((s, v) => s + v.cost, 0);
+    return Object.entries(map)
+      .map(([name, { cost, calls }]) => ({ name, cost, calls, pct: total > 0 ? (cost / total) * 100 : 0 }))
+      .sort((a, b) => b.cost - a.cost);
+  }, [apiItems]);
+
+  if (breakdown.length === 0) return null;
+
+  return (
+    <div style={{
+      padding: '5px 16px', background: 'var(--surface2)', borderBottom: '1px solid var(--border)',
+      display: 'flex', flexWrap: 'wrap', gap: '3px 14px', alignItems: 'center', flexShrink: 0,
+    }}>
+      <span style={{ color: 'var(--muted)', fontSize: 10, whiteSpace: 'nowrap' }}>By activity:</span>
+      {breakdown.map(row => (
+        <span key={row.name} style={{ display: 'inline-flex', alignItems: 'baseline', gap: 3, fontSize: 10 }}>
+          <span style={{ color: 'var(--text)', fontWeight: 500 }}>{row.name}</span>
+          <span style={{ color: '#7ee787', fontWeight: 600 }}>{fmtCost(row.cost)}</span>
+          <span style={{ color: 'var(--muted)' }}>({row.pct.toFixed(0)}%)</span>
+          <span style={{ color: 'var(--muted)' }}>×{row.calls}</span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+// ── Session totals ─────────────────────────────────────────────────────────
+function SessionTotals({ timeline }) {
+  const apiItems = useMemo(() => timeline.filter(i => i.kind === 'assistant'), [timeline]);
+  const totals   = useMemo(() => {
+    const zero = { input: 0, cr: 0, cw: 0, out: 0, total: 0 };
+    return apiItems.reduce((a, i) => {
+      const u = getUsage(i);
+      return { input: a.input+u.input, cr: a.cr+u.cr, cw: a.cw+u.cw, out: a.out+u.out, total: a.total+u.total };
+    }, zero);
+  }, [apiItems]);
+  const cost = useMemo(() => apiItems.reduce((s, i) => s + (i.cost_usd || 0), 0), [apiItems]);
+
+  return (
+    <div className="totals">
+      <strong style={{ color: '#7ee787', fontSize: 12 }}>{fmtCost(cost)}</strong>
+      <span className="sep">·</span>
+      <span style={{ color: 'var(--muted)' }}>{apiItems.length} API calls</span>
+      <span className="sep">·</span>
+      {[
+        { key: 'input', label: 'in',  color: 'var(--tok-input)' },
+        { key: 'cr',    label: 'cr',  color: 'var(--tok-cr)' },
+        { key: 'cw',    label: 'cw',  color: 'var(--tok-cw)' },
+        { key: 'out',   label: 'out', color: 'var(--tok-out)' },
+      ].filter(b => totals[b.key] > 0).map(b => (
+        <span key={b.key} className="totals-badge">
+          <span className="t-dot" style={{ background: b.color }} />
+          <span style={{ color: 'var(--muted)' }}>{b.label}</span>
+          <strong style={{ color: 'var(--text)' }}>{fmtTok(totals[b.key])}</strong>
+        </span>
+      ))}
+      <span style={{ color: 'var(--muted)', marginLeft: 'auto', fontSize: 10 }}>
+        {fmtTok(totals.total)} total tokens
+      </span>
+    </div>
+  );
+}
+
+// ── renderItem ─────────────────────────────────────────────────────────────
+function renderItem(item, idx, maxCost, sessionId) {
+  if (item.kind === 'user')      return <UserCard key={idx} item={item} />;
+  if (item.kind === 'assistant') return <ApiCard  key={idx} item={item} maxCost={maxCost} sessionId={sessionId} />;
+  return null;
+}
+
+// ── URL param sync ─────────────────────────────────────────────────────────
+function getUrlParams() {
+  const p = new URLSearchParams(window.location.search);
+  return { project: p.get('project') || '', session: p.get('session') || '', sort: p.get('sort') || 'date' };
+}
+
+// ── App ────────────────────────────────────────────────────────────────────
+function App() {
+  const initUrl = useMemo(() => getUrlParams(), []);
+  const [projects,    setProjects]    = useState([]);
+  const [projectKey,  setProjectKey]  = useState(initUrl.project);
+  const [sessions,    setSessions]    = useState([]);
+  const [sessionId,   setSessionId]   = useState(initUrl.session);
+  const [sortBy,      setSortBy]      = useState(initUrl.sort);
+  const [timeline,    setTimeline]    = useState(null);
+  const [loading,     setLoading]     = useState(false);
+  const [err,         setErr]         = useState(null);
+
+  // Preserve URL session on first project load; cleared after first use
+  const initSessionRef = useRef(initUrl.session || null);
+
+  // Sync URL whenever selection changes
+  useEffect(() => {
+    const p = new URLSearchParams();
+    if (projectKey) p.set('project', projectKey);
+    if (sessionId)  p.set('session', sessionId);
+    if (sortBy !== 'date') p.set('sort', sortBy);
+    const qs = p.toString();
+    window.history.replaceState(null, '', qs ? '?' + qs : window.location.pathname);
+  }, [projectKey, sessionId, sortBy]);
+
+  useEffect(() => {
+    fetch('/api/projects')
+      .then(r => r.json())
+      .then(data => {
+        setProjects(data);
+        // Only auto-select if URL didn't provide a project
+        if (data.length && !initUrl.project) setProjectKey(data[0].key);
+      })
+      .catch(() => setErr('Cannot reach server — is claude-code-transcripts-serve running? (cargo run --features serve --bin claude-code-transcripts-serve)'));
+  }, []);
+
+  useEffect(() => {
+    if (!projectKey) return;
+    setSessions([]); setTimeline(null);
+    const preserveSession = initSessionRef.current;
+    if (!preserveSession) setSessionId('');
+    fetch(`/api/sessions?project=${encodeURIComponent(projectKey)}`)
+      .then(r => r.json())
+      .then(data => {
+        setSessions(data);
+        if (preserveSession) {
+          initSessionRef.current = null;
+          // If URL session not found in list, fall back to first
+          if (!data.find(s => s.id === preserveSession) && data.length) setSessionId(data[0].id);
+        } else {
+          if (data.length) setSessionId(data[0].id);
+        }
+      })
+      .catch(() => {});
+  }, [projectKey]);
+
+  const sortedSessions = useMemo(() => {
+    const s = [...sessions];
+    if (sortBy === 'cost') s.sort((a, b) => (b.costUsd || 0) - (a.costUsd || 0));
+    else s.sort((a, b) => new Date(b.lastActive) - new Date(a.lastActive));
+    return s;
+  }, [sessions, sortBy]);
+
+  const load = useCallback(async () => {
+    if (!projectKey || !sessionId) return;
+    setLoading(true); setErr(null); setTimeline(null);
+    try {
+      const r = await fetch(`/api/transcript?project=${encodeURIComponent(projectKey)}&session=${encodeURIComponent(sessionId)}`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      setTimeline(data.entries || []);
+    } catch (e) { setErr(e.message); }
+    setLoading(false);
+  }, [projectKey, sessionId]);
+
+  useEffect(() => { if (sessionId) load(); }, [sessionId]);
+
+  const apiItems = useMemo(() => (timeline || []).filter(i => i.kind === 'assistant'), [timeline]);
+  const maxCost  = useMemo(() => Math.max(1e-9, ...apiItems.map(i => i.cost_usd || 0)), [apiItems]);
+
+  return (
+    <>
+      <div className="header">
+        <label>Project</label>
+        <select value={projectKey} onChange={e => setProjectKey(e.target.value)} style={{ minWidth: 180, maxWidth: 320 }}>
+          {projects.map(p => (
+            <option key={p.key} value={p.key}>{p.display} ({p.sessionCount})</option>
+          ))}
+        </select>
+
+        <span className="sep">·</span>
+
+        <label>Sort</label>
+        <div className="sort-group">
+          <button className={`sort-btn ${sortBy === 'date' ? 'active' : ''}`} onClick={() => setSortBy('date')}>date</button>
+          <button className={`sort-btn ${sortBy === 'cost' ? 'active' : ''}`} onClick={() => setSortBy('cost')}>cost</button>
+        </div>
+
+        <label>Session</label>
+        <select value={sessionId} onChange={e => setSessionId(e.target.value)} style={{ minWidth: 260, maxWidth: 420 }}>
+          {sortedSessions.map(s => (
+            <option key={s.id} value={s.id}>
+              {s.hasSubagents ? '🤖 ' : ''}{fmtDate(s.lastActive)} — {fmtCost(s.costUsd)} [{s.id.slice(0, 8)}]
+            </option>
+          ))}
+        </select>
+
+        <button className="btn" onClick={load} disabled={loading || !sessionId}>
+          {loading ? 'Loading…' : 'Reload'}
+        </button>
+
+        {err && <span className="err">{err}</span>}
+      </div>
+
+      {timeline && <SessionTotals timeline={timeline} />}
+      {timeline && <CostChart apiItems={apiItems} />}
+      {timeline && <ActivityBreakdown timeline={timeline} />}
+
+      <div className="timeline">
+        {!timeline && !loading && <div className="empty">Select a project and session above</div>}
+        {loading && <div className="empty">Loading transcript…</div>}
+        {timeline && timeline.map((item, idx) => renderItem(item, idx, maxCost, sessionId))}
+      </div>
+
+      <div className="legend">
+        <span>Token legend:</span>
+        {[['var(--tok-input)','input'],['var(--tok-cr)','cache read'],['var(--tok-cw)','cache write'],['var(--tok-out)','output']].map(([c,l]) => (
+          <span key={l} className="leg-item">
+            <span className="leg-swatch" style={{ background: c }} /> {l}
+          </span>
+        ))}
+        <span style={{ marginLeft: 10, color: 'var(--muted)', fontStyle: 'italic' }}>
+          tok bar: 100% = 1M tokens · cost bar: 100% = max call cost in session · cost from DB
+        </span>
+      </div>
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

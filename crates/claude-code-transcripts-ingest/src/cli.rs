@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 
 fn default_input_dir() -> PathBuf {
     let home = std::env::var("HOME")
@@ -9,13 +9,27 @@ fn default_input_dir() -> PathBuf {
     PathBuf::from(home).join(".claude").join("projects")
 }
 
-#[derive(Parser, Debug, Clone)]
+#[derive(Parser, Debug)]
 #[command(
-    name = "ingest",
+    name = "cct",
     version,
-    about = "Ingest Claude Code JSONL transcripts into a DuckDB database"
+    about = "Claude Code transcript tools — ingest JSONL transcripts into DuckDB and serve the viewer UI"
 )]
 pub struct Cli {
+    #[command(subcommand)]
+    pub command: Command,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum Command {
+    /// Ingest Claude Code JSONL transcripts into a DuckDB database
+    Ingest(IngestArgs),
+    /// Serve the transcript viewer web UI
+    Serve(ServeArgs),
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct IngestArgs {
     /// Input directory to scan recursively for .jsonl files.
     #[arg(short = 'i', long = "input-dir", default_value_os_t = default_input_dir())]
     pub input_dir: PathBuf,
@@ -35,4 +49,15 @@ pub struct Cli {
     /// Disable per-second progress reporting on stderr.
     #[arg(long = "no-progress")]
     pub no_progress: bool,
+}
+
+#[derive(Parser, Debug)]
+pub struct ServeArgs {
+    /// DuckDB database file to serve.
+    #[arg(long = "db", default_value = "./transcripts.duckdb")]
+    pub db: PathBuf,
+
+    /// Port to listen on.
+    #[arg(long = "port", default_value_t = 8766)]
+    pub port: u16,
 }

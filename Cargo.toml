@@ -23,3 +23,5 @@ clap = { version = "4", features = ["derive"] }
 duckdb = { version = "1", features = ["bundled"] }
 crossbeam-channel = "0.5"
 toml = "0.8"
+axum = "0.7"
+tokio = { version = "1", features = ["full"] }

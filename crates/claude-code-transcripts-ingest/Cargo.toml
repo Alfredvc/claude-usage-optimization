@@ -12,10 +12,12 @@ authors.workspace = true
 repository.workspace = true
 
 [[bin]]
-name = "claude-code-transcripts-ingest"
+name = "cct"
 path = "src/main.rs"
 
 [dependencies]
+axum = { workspace = true }
+tokio = { workspace = true }
 claude-code-transcripts = { path = "../claude-code-transcripts", version = "0.1" }
 serde = { workspace = true }
 serde_json = { workspace = true }
