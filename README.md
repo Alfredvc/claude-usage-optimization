@@ -1,7 +1,7 @@
-<h1 align="center">cct</h1>
+<h1 align="center">Claude Usage Optimization</h1>
 
 <p align="center">
-  <img src="docs/assets/readme_banner.png" alt="cct banner" width="800" />
+  <img src="docs/assets/readme_banner.png" alt="Claude Usage Optimization banner" width="800" />
 </p>
 
 <p align="center">
@@ -11,17 +11,13 @@
   <a href="LICENSE-MIT"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue" alt="License: MIT OR Apache-2.0" /></a>
 </p>
 
-**Let Claude audit its own bill.** `cct` turns every transcript under `~/.claude/projects` into a local DuckDB. With the provided skills Claude runs SQL over your own history and returns a dollar-ranked optimization report. Actionable insights backed by your own usage, not generic advice.
+**Let Claude audit its own bill.** Agent skills that turn every transcript under `~/.claude/projects` into a local DuckDB, then let Claude run SQL over your own history and return a dollar-ranked optimization report. Actionable insights backed by your own usage, not generic advice.
 
-## Install cct
+Skills pair with `claude-code-transcripts-ingest` (`cct`), the Rust binary in this repo that ingests your transcripts into DuckDB.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/Alfredvc/claude-usage-optimization/main/install.sh | sh
-```
+## Install
 
-Downloads the latest prebuilt `cct` binary into `~/.local/bin`. Override with `CCT_INSTALL_DIR=/some/dir` or pin a version with `CCT_VERSION=v0.2.0`.
-
-## Install skills
+### 1. Skills
 
 Install for Claude Code, Cursor, Gemini CLI, etc:
 
@@ -29,27 +25,41 @@ Install for Claude Code, Cursor, Gemini CLI, etc:
 npx skills add alfredvc/claude-usage-optimization
 ```
 
-## Quickstart
+### 2. `cct` (required)
+
 ```bash
-cct ingest
+curl -fsSL https://raw.githubusercontent.com/Alfredvc/claude-usage-optimization/main/install.sh | sh
 ```
 
-Claude uses the duckdb cli, follow instructions to install [https://duckdb.org/install/?platform=macos&environment=cli](https://duckdb.org/install/?platform=macos&environment=cli) or
+Downloads the latest prebuilt `cct` binary into `~/.local/bin`. Override with `CCT_INSTALL_DIR=/some/dir` or pin a version with `CCT_VERSION=v0.2.0`. Source: [`crates/claude-code-transcripts-ingest/`](crates/claude-code-transcripts-ingest/).
+
+### 3. DuckDB CLI (required)
+
+Skills query the DB via the `duckdb` CLI. Install from [duckdb.org](https://duckdb.org/install/?platform=macos&environment=cli) or:
 
 ```bash
 curl https://install.duckdb.org | sh
 ```
 
-Then simply ask claude to help you `/optimize-usage`
+## Quickstart
 
-The skill runs a multi-phase investigation against your own DB: measures spend categories, inspects raw high-cost turns, disconfirms shallow leads, then ranks concrete levers by dollar impact. 
+```bash
+cct ingest
+```
+
+Then ask Claude `/optimize-usage`.
+
+The skill runs a multi-phase investigation against your own DB: measures spend categories, inspects raw high-cost turns, disconfirms shallow leads, then ranks concrete levers by dollar impact.
+
+## Tips
+If you have any hypothesis as to what could be consuming your usage, ask Claude, it is excellent at testing them with cct.
 
 ## Available skills
 
 - **claude-usage-db** — gives the agent everything it needs to query the transcripts DB safely: schema layout, sidechain/subagent model, JSON column shapes, billing-safety rules, and a library of ready-to-run SQL recipes for cost, token, tool-use, and session analysis.
 - **optimize-usage** — diagnostic methodology for turning the DB into actionable cost recommendations. Guides the agent past shallow category rollups toward root causes (artifact propagation, context bloat, workflow cycles) with phase gates that prevent premature victory declaration. Built on top of `claude-usage-db`.
 
-## Commands
+## `cct` commands
 
 ### `cct ingest`
 
