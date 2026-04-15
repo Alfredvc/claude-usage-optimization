@@ -458,10 +458,9 @@ WHERE block_type = 'tool_use';
 
 // PK uniqueness preserved via UNIQUE indexes built once post-ingest
 // instead of per-row during append.
+// Primary keys for root tables are added via PK_DDL (also post-ingest).
 pub const INDEXES_DDL: &str = r#"
-CREATE UNIQUE INDEX IF NOT EXISTS uq_transcripts_pk                         ON transcripts(file_path);
-CREATE UNIQUE INDEX IF NOT EXISTS uq_entries_pk                             ON entries(entry_id);
-CREATE UNIQUE INDEX IF NOT EXISTS uq_model_pricing_pk                       ON model_pricing(model);
+-- transcripts, entries, model_pricing primary keys added in PK_DDL below
 CREATE UNIQUE INDEX IF NOT EXISTS uq_user_entries_pk                        ON user_entries(entry_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_assistant_entries_pk                   ON assistant_entries(entry_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_system_entries_pk                      ON system_entries(entry_id);
@@ -503,4 +502,68 @@ CREATE INDEX IF NOT EXISTS idx_assistant_cost        ON assistant_entries(cost_u
 CREATE INDEX IF NOT EXISTS idx_assistant_block_tool  ON assistant_content_blocks(tool_name);
 CREATE INDEX IF NOT EXISTS idx_attachment_type       ON attachment_entries(attachment_type);
 CREATE INDEX IF NOT EXISTS idx_transcripts_session   ON transcripts(session_id);
+"#;
+
+// Primary keys on the three root tables. Applied post-ingest (after the
+// single transaction commits) so constraint checking never fires during the
+// bulk append phase.
+pub const PK_DDL: &str = r#"
+ALTER TABLE transcripts   ADD PRIMARY KEY (file_path);
+ALTER TABLE entries       ADD PRIMARY KEY (entry_id);
+ALTER TABLE model_pricing ADD PRIMARY KEY (model);
+"#;
+
+// FK relationships documented as column comments. DuckDB does not yet
+// support ALTER TABLE ADD FOREIGN KEY, so comments are the next-best thing:
+// they are stored in the DB and visible via duckdb_columns() or any schema
+// introspection tool.
+//
+// Notation:
+//   → table(col)   hard reference — every row in this table has a matching
+//                  row in the target table (enforced by ingest order)
+//   ~ table(col)   soft reference — target row may not exist
+//                  (e.g. unknown models absent from model_pricing)
+pub const COMMENTS_DDL: &str = r#"
+-- ── entries → transcripts ────────────────────────────────────────────────
+COMMENT ON COLUMN entries.file_path IS '→ transcripts(file_path)';
+
+-- ── rich variant tables → entries (1:1) ──────────────────────────────────
+COMMENT ON COLUMN user_entries.entry_id       IS '→ entries(entry_id)';
+COMMENT ON COLUMN assistant_entries.entry_id  IS '→ entries(entry_id)';
+COMMENT ON COLUMN system_entries.entry_id     IS '→ entries(entry_id)';
+COMMENT ON COLUMN attachment_entries.entry_id IS '→ entries(entry_id)';
+COMMENT ON COLUMN progress_entries.entry_id   IS '→ entries(entry_id)';
+
+-- ── child tables → entries (1:many) ──────────────────────────────────────
+COMMENT ON COLUMN user_content_blocks.entry_id              IS '→ entries(entry_id)';
+COMMENT ON COLUMN assistant_content_blocks.entry_id         IS '→ entries(entry_id)';
+COMMENT ON COLUMN assistant_usage_iterations.entry_id       IS '→ entries(entry_id)';
+COMMENT ON COLUMN system_hook_infos.entry_id                IS '→ entries(entry_id)';
+COMMENT ON COLUMN attachment_diagnostics_files.entry_id     IS '→ entries(entry_id)';
+COMMENT ON COLUMN attachment_invoked_skills.entry_id        IS '→ entries(entry_id)';
+
+-- ── metadata variant tables → entries (1:1) ──────────────────────────────
+COMMENT ON COLUMN permission_mode_entries.entry_id          IS '→ entries(entry_id)';
+COMMENT ON COLUMN last_prompt_entries.entry_id              IS '→ entries(entry_id)';
+COMMENT ON COLUMN ai_title_entries.entry_id                 IS '→ entries(entry_id)';
+COMMENT ON COLUMN custom_title_entries.entry_id             IS '→ entries(entry_id)';
+COMMENT ON COLUMN agent_name_entries.entry_id               IS '→ entries(entry_id)';
+COMMENT ON COLUMN agent_color_entries.entry_id              IS '→ entries(entry_id)';
+COMMENT ON COLUMN agent_setting_entries.entry_id            IS '→ entries(entry_id)';
+COMMENT ON COLUMN tag_entries.entry_id                      IS '→ entries(entry_id)';
+COMMENT ON COLUMN summary_entries.entry_id                  IS '→ entries(entry_id)';
+COMMENT ON COLUMN task_summary_entries.entry_id             IS '→ entries(entry_id)';
+COMMENT ON COLUMN pr_link_entries.entry_id                  IS '→ entries(entry_id)';
+COMMENT ON COLUMN mode_entries.entry_id                     IS '→ entries(entry_id)';
+COMMENT ON COLUMN worktree_state_entries.entry_id           IS '→ entries(entry_id)';
+COMMENT ON COLUMN content_replacement_entries.entry_id      IS '→ entries(entry_id)';
+COMMENT ON COLUMN file_history_snapshot_entries.entry_id    IS '→ entries(entry_id)';
+COMMENT ON COLUMN attribution_snapshot_entries.entry_id     IS '→ entries(entry_id)';
+COMMENT ON COLUMN queue_operation_entries.entry_id          IS '→ entries(entry_id)';
+COMMENT ON COLUMN marble_origami_commit_entries.entry_id    IS '→ entries(entry_id)';
+COMMENT ON COLUMN marble_origami_snapshot_entries.entry_id  IS '→ entries(entry_id)';
+COMMENT ON COLUMN speculation_accept_entries.entry_id       IS '→ entries(entry_id)';
+
+-- ── soft references ───────────────────────────────────────────────────────
+COMMENT ON COLUMN assistant_entries.model IS '~ model_pricing(model) [soft: unknown models allowed]';
 "#;
