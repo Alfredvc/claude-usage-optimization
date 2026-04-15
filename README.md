@@ -99,10 +99,10 @@ Shows total spend, daily cost by model (Opus / Sonnet / Haiku), cache hit rate, 
 ## Workspace
 
 ```
-crates/claude-code-transcripts/          # typed parser library (no DuckDB)
-crates/claude-code-transcripts-ingest/   # `cct` binary (ingest + serve)
-web/index.html                           # embedded React viewer
-skills/                                  # agent skills (see above)
+crates/claude-code-transcripts/              # typed parser library (no DuckDB)
+crates/claude-code-transcripts-ingest/       # `cct` binary (ingest + serve)
+crates/claude-code-transcripts-ingest/web/   # embedded React viewer (index.html)
+skills/                                      # agent skills (see above)
 ```
 
 The parser crate ([`claude-code-transcripts`](https://crates.io/crates/claude-code-transcripts)) is independently usable — strongly-typed `Entry` variants and a round-trip validator for catching schema drift.

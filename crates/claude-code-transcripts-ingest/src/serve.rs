@@ -1624,7 +1624,7 @@ pub async fn run(args: ServeArgs) {
     let db_path = args.db.to_string_lossy().into_owned();
     let port = args.port;
 
-    let html = include_str!("../../../web/index.html").to_string();
+    let html = include_str!("../web/index.html").to_string();
 
     let state = AppState { db_path, html };
 
