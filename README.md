@@ -19,7 +19,7 @@ Skills pair with `claude-code-transcripts-ingest` (`cct`), the Rust binary in th
 
 ### 1. Skills
 
-Install for Claude Code, Cursor, Gemini CLI, etc:
+Install for Claude Code
 
 ```bash
 npx skills add alfredvc/claude-usage-optimization
@@ -56,55 +56,27 @@ If you have any hypothesis as to what could be consuming your usage, ask Claude,
 
 ## Available skills
 
-- **claude-usage-db** — gives the agent everything it needs to query the transcripts DB safely: schema layout, sidechain/subagent model, JSON column shapes, billing-safety rules, and a library of ready-to-run SQL recipes for cost, token, tool-use, and session analysis.
-- **optimize-usage** — diagnostic methodology for turning the DB into actionable cost recommendations. Guides the agent past shallow category rollups toward root causes (artifact propagation, context bloat, workflow cycles) with phase gates that prevent premature victory declaration. Built on top of `claude-usage-db`.
+- **claude-usage-db** — schema and SQL recipes so Claude can query the transcripts DB efficiently.
+- **optimize-usage** — gives Claude the tools to investigate your usage and return concrete, dollar-ranked fixes to reduce it. Built on `claude-usage-db`.
 
-## `cct` commands
+## Explore sessions in the viewer
 
-### `cct ingest`
+`cct serve` opens an embedded web viewer at `http://localhost:8766`. Pick a project → session to drill in turn-by-turn.
 
-Scan JSONL transcripts and write a DuckDB database.
-
-```
-cct ingest [-i <dir>] [-o <file>] [-j <jobs>] [--pricing <toml>] [--no-progress]
-```
-
-| Flag | Default | Meaning |
-|---|---|---|
-| `-i, --input-dir` | `~/.claude/projects` | Directory scanned recursively for `.jsonl` |
-| `-o, --output` | `./transcripts.duckdb` | Output DuckDB file (overwritten each run) |
-| `-j, --jobs` | `0` (logical CPUs) | Parallel worker threads |
-| `--pricing` | — | TOML overriding the seeded `model_pricing` table |
-| `--no-progress` | — | Silence per-second progress on stderr |
-
-### `cct serve`
-
-Serve the embedded viewer backed by a DuckDB file.
-
-```
-cct serve [--db <file>] [--port <n>]
-```
-
-| Flag | Default | Meaning |
-|---|---|---|
-| `--db` | `./transcripts.duckdb` | DB file to serve |
-| `--port` | `8766` | Listen port |
-
-#### Transcripts
-
-Browse by project → session → turn-by-turn timeline. Every assistant turn shows its exact cost: input, output, cache-read, and cache-creation tokens with the resulting dollar amount. Subagent calls expand inline so you can trace the full cost of any delegated task back to the turn that triggered it.
+- **Per-turn cost.** Each assistant turn shows model, timestamp, and dollar cost — with input / cache-read / cache-write / output split as colored bars against the session total.
+- **Activity at a glance.** Pills tag what the turn did: thinking (💭), text (💬), tool calls (🔧). An activity panel rolls up cost and call count per tool so the budget-eaters stand out.
+- **Subagent expansion.** Subagent calls expand inline and lazy-load their full transcript, so you can trace delegated work — and its cost — back to the parent turn that spawned it.
+- **Cumulative cost chart.** Area chart above the timeline plots spend over the whole session. Click any dot to jump to and highlight that turn.
+- **Session rollup.** Fixed header shows total cost, API call count, and token totals by type.
+- **Sort by cost or date.** Session list can sort by most recent or highest spend, so expensive sessions float to the top.
 
 <p align="center">
   <img src="docs/assets/transcripts.png" alt="cct serve transcripts" width="800" />
 </p>
 
-#### Dashboard
+## `cct` reference
 
-Shows total spend, daily cost by model (Opus / Sonnet / Haiku), cache hit rate, agent model inheritance (subagents that silently fell back to Opus), top sessions by cost, file hotspots (files re-read across the most sessions), and error cost premium.
-
-<p align="center">
-  <img src="docs/assets/dashboard.png" alt="cct serve dashboard" width="800" />
-</p>
+Full `cct` reference can be found in [`crates/claude-code-transcripts-ingest/README.md`](crates/claude-code-transcripts-ingest/README.md).
 
 ## Workspace
 
@@ -124,6 +96,26 @@ The parser crate ([`claude-code-transcripts`](https://crates.io/crates/claude-co
 - `cargo clippy --all-targets --all-features`
 - `cargo fmt`
 - Pre-commit hook (`.git/hooks/pre-commit`) runs `fmt` + `clippy`
+
+## Release
+
+Releases are driven by [`cargo-release`](https://github.com/crate-ci/cargo-release) locally and the tag-triggered [`release.yml`](.github/workflows/release.yml) workflow in CI.
+
+1. On `main`, bump the shared workspace version:
+
+   ```sh
+   cargo release patch --execute    # or minor / major
+   ```
+
+   Per [`release.toml`](release.toml) this bumps `Cargo.toml`, commits `chore: release vX.Y.Z`, tags `vX.Y.Z`, and pushes both.
+
+2. Pushing the `vX.Y.Z` tag triggers [`release.yml`](.github/workflows/release.yml), which:
+   - Creates a draft GitHub release with auto-generated notes.
+   - Builds `cct` binaries for linux/macos × x86_64/aarch64 and uploads tarballs + `.sha256` files.
+   - Publishes `claude-code-transcripts`, then `claude-code-transcripts-ingest`, to crates.io.
+   - Flips the release from draft to published.
+
+Requirements: `cargo install cargo-release` locally, write access to push tags, and the `CARGO_REGISTRY_TOKEN` repo secret configured.
 
 ## License
 

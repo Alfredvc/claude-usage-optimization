@@ -53,6 +53,18 @@ cct serve [--db <file>] [--port <n>]
 | `--db` | `./transcripts.duckdb` | DB file to serve |
 | `--port` | `8766` | Listen port |
 
+#### Transcripts
+
+Browse by project → session → turn-by-turn timeline. Every assistant turn shows its exact cost: input, output, cache-read, and cache-creation tokens with the resulting dollar amount. Subagent calls expand inline so you can trace the full cost of any delegated task back to the turn that triggered it.
+
+![cct serve transcripts](https://raw.githubusercontent.com/alfredvc/claude-usage-optimization/main/docs/assets/transcripts.png)
+
+#### Dashboard
+
+Shows total spend, daily cost by model (Opus / Sonnet / Haiku), cache hit rate, agent model inheritance (subagents that silently fell back to Opus), top sessions by cost, file hotspots (files re-read across the most sessions), and error cost premium.
+
+![cct serve dashboard](https://raw.githubusercontent.com/alfredvc/claude-usage-optimization/main/docs/assets/dashboard.png)
+
 Run `cct --help` / `cct <subcommand> --help` for the authoritative flag list.
 
 ## Library
