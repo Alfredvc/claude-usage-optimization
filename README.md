@@ -1,7 +1,7 @@
 <h1 align="center">cct</h1>
 
 <p align="center">
-  <img src="docs/readme-image.jpg" alt="cct banner" width="800" />
+  <img src="docs/assets/readme_banner.png" alt="cct banner" width="800" />
 </p>
 
 <p align="center">
@@ -11,23 +11,17 @@
   <a href="LICENSE-MIT"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue" alt="License: MIT OR Apache-2.0" /></a>
 </p>
 
-Ingest every Claude Code JSONL transcript under `~/.claude/projects` into a single DuckDB file, then query it with SQL or explore it in the embedded React viewer.
+**Let Claude audit its own bill.** `cct` turns every transcript under `~/.claude/projects` into a local DuckDB. With the provided skills Claude runs SQL over your own history and returns a dollar-ranked optimization report. Actionable insights backed by your own usage, not generic advice.
 
-## Install
+## Install cct
 
 ```bash
-cargo install claude-code-transcripts-ingest
+curl -fsSL https://raw.githubusercontent.com/Alfredvc/claude-usage-optimization/main/install.sh | sh
 ```
 
-Installs the `cct` binary. DuckDB is built from bundled C++ sources — first install takes a minute.
+Downloads the latest prebuilt `cct` binary into `~/.local/bin`. Override with `CCT_INSTALL_DIR=/some/dir` or pin a version with `CCT_VERSION=v0.2.0`.
 
-## Agent Integration
-
-### AGENTS.md
-
-See [AGENTS.md](AGENTS.md).
-
-### Agent Skills
+## Install skills
 
 Install for Claude Code, Cursor, Gemini CLI, etc:
 
@@ -35,18 +29,20 @@ Install for Claude Code, Cursor, Gemini CLI, etc:
 npx skills add alfredvc/claude-usage-optimization
 ```
 
-Available skills:
+## Quickstart
+
+```bash
+cct ingest
+```
+
+Then simply ask claude to help you `/optimize-usage`
+
+The skill runs a multi-phase investigation against your own DB: measures spend categories, inspects raw high-cost turns, disconfirms shallow leads, then ranks concrete levers by dollar impact. 
+
+## Available skills
 
 - **claude-usage-db** — gives the agent everything it needs to query the transcripts DB safely: schema layout, sidechain/subagent model, JSON column shapes, billing-safety rules, and a library of ready-to-run SQL recipes for cost, token, tool-use, and session analysis.
 - **optimize-usage** — diagnostic methodology for turning the DB into actionable cost recommendations. Guides the agent past shallow category rollups toward root causes (artifact propagation, context bloat, workflow cycles) with phase gates that prevent premature victory declaration. Built on top of `claude-usage-db`.
-
-## Quick Start
-
-```bash
-cct ingest                                          # scans ~/.claude/projects → ./transcripts.duckdb
-cct serve                                           # viewer at http://localhost:8766
-duckdb transcripts.duckdb "SELECT ROUND(SUM(cost_usd),2) FROM assistant_entries_deduped WHERE message_id IS NOT NULL;"
-```
 
 ## Commands
 
@@ -79,6 +75,22 @@ cct serve [--db <file>] [--port <n>]
 | `--db` | `./transcripts.duckdb` | DB file to serve |
 | `--port` | `8766` | Listen port |
 
+#### Transcripts
+
+Browse by project → session → turn-by-turn timeline. Every assistant turn shows its exact cost: input, output, cache-read, and cache-creation tokens with the resulting dollar amount. Subagent calls expand inline so you can trace the full cost of any delegated task back to the turn that triggered it.
+
+<p align="center">
+  <img src="docs/assets/transcripts.png" alt="cct serve transcripts" width="800" />
+</p>
+
+#### Dashboard
+
+Shows total spend, daily cost by model (Opus / Sonnet / Haiku), cache hit rate, agent model inheritance (subagents that silently fell back to Opus), top sessions by cost, file hotspots (files re-read across the most sessions), and error cost premium.
+
+<p align="center">
+  <img src="docs/assets/dashboard.png" alt="cct serve dashboard" width="800" />
+</p>
+
 ## Workspace
 
 ```
@@ -86,7 +98,6 @@ crates/claude-code-transcripts/          # typed parser library (no DuckDB)
 crates/claude-code-transcripts-ingest/   # `cct` binary (ingest + serve)
 web/index.html                           # embedded React viewer
 skills/                                  # agent skills (see above)
-docs/cost-attribution.md                 # why dedup by (file_path, message_id) is safe
 ```
 
 The parser crate ([`claude-code-transcripts`](https://crates.io/crates/claude-code-transcripts)) is independently usable — strongly-typed `Entry` variants and a round-trip validator for catching schema drift.
