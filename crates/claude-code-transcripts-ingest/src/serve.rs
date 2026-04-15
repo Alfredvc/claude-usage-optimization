@@ -7,15 +7,15 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use axum::{
-    Router,
     extract::{Query, State},
     http::StatusCode,
     response::{Html, IntoResponse, Json, Response},
     routing::get,
+    Router,
 };
 use duckdb::Connection;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tokio::task::spawn_blocking;
 
 use crate::cli::ServeArgs;
@@ -179,7 +179,12 @@ fn summarize_input(name: &str, input: &Value) -> String {
         "path",
     ]
     .iter()
-    .find_map(|k| input.get(k).and_then(|v| v.as_str()).filter(|s| !s.is_empty()));
+    .find_map(|k| {
+        input
+            .get(k)
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+    });
 
     if let Some(v) = val {
         let s: String = v.chars().take(55).collect();
@@ -220,7 +225,9 @@ async fn api_projects(State(state): State<AppState>) -> Response {
             .map_err(|e| e.to_string())?;
 
         let rows = stmt
-            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
             .map_err(|e| e.to_string())?;
 
         let mut out = Vec::new();
@@ -323,10 +330,7 @@ struct TranscriptQ {
     session: Option<String>,
 }
 
-async fn api_transcript(
-    State(state): State<AppState>,
-    Query(q): Query<TranscriptQ>,
-) -> Response {
+async fn api_transcript(State(state): State<AppState>, Query(q): Query<TranscriptQ>) -> Response {
     let session = q.session.unwrap_or_default();
     if session.is_empty() {
         return (StatusCode::BAD_REQUEST, "session required").into_response();
@@ -512,10 +516,7 @@ fn build_timeline(conn: &Connection, file_path: &str) -> Result<Value, String> {
             .map_err(|e| e.to_string())?;
         let rows = stmt
             .query_map([file_path], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, Option<String>>(1)?,
-                ))
+                Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
             })
             .map_err(|e| e.to_string())?;
         for r in rows.filter_map(|r| r.ok()) {
@@ -604,6 +605,10 @@ fn build_timeline(conn: &Connection, file_path: &str) -> Result<Value, String> {
     }
 
     // ── assistant content blocks ───────────────────────────────────────────────
+    // Each streaming JSONL entry for a message carries exactly one content block.
+    // The deduped view picks one entry_id per message_id, but the blocks are spread
+    // across all sibling entries. Join through message_id to collect all of them,
+    // grouping under the deduped entry_id.
     struct Block {
         block_type: String,
         text: Option<String>,
@@ -615,14 +620,24 @@ fn build_timeline(conn: &Connection, file_path: &str) -> Result<Value, String> {
     {
         let mut stmt = conn
             .prepare(
-                "SELECT entry_id, block_type, text, tool_use_id, tool_name, tool_input \
-             FROM assistant_content_blocks \
-             WHERE entry_id IN (SELECT entry_id FROM entries WHERE file_path = ?) \
-             ORDER BY entry_id, position",
+                "SELECT aed.entry_id AS dedup_eid, acb.block_type, acb.text, \
+                        acb.tool_use_id, acb.tool_name, acb.tool_input \
+                 FROM assistant_entries_deduped aed \
+                 JOIN entries e_dedup ON e_dedup.entry_id = aed.entry_id \
+                   AND e_dedup.file_path = ? \
+                 JOIN assistant_entries ae_dedup ON ae_dedup.entry_id = aed.entry_id \
+                 JOIN entries e_all ON e_all.file_path = ? \
+                 JOIN assistant_entries ae_all ON ae_all.entry_id = e_all.entry_id \
+                   AND (   (ae_dedup.message_id IS NOT NULL \
+                            AND ae_all.message_id = ae_dedup.message_id) \
+                        OR (ae_dedup.message_id IS NULL \
+                            AND ae_all.entry_id = aed.entry_id)) \
+                 JOIN assistant_content_blocks acb ON acb.entry_id = ae_all.entry_id \
+                 ORDER BY aed.entry_id, ae_all.entry_id, acb.position",
             )
             .map_err(|e| e.to_string())?;
         let rows = stmt
-            .query_map([file_path], |row| {
+            .query_map([file_path, file_path], |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
                     row.get::<_, String>(1)?,
@@ -634,11 +649,11 @@ fn build_timeline(conn: &Connection, file_path: &str) -> Result<Value, String> {
             })
             .map_err(|e| e.to_string())?;
         for r in rows.filter_map(|r| r.ok()) {
-            let (eid, bt, text, tu_id, tu_name, tu_input_json) = r;
+            let (dedup_eid, bt, text, tu_id, tu_name, tu_input_json) = r;
             let tu_input = tu_input_json
                 .as_deref()
                 .and_then(|j| serde_json::from_str(j).ok());
-            asst_blocks.entry(eid).or_default().push(Block {
+            asst_blocks.entry(dedup_eid).or_default().push(Block {
                 block_type: bt,
                 text,
                 tu_id,

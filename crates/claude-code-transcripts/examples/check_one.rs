@@ -1,16 +1,13 @@
-use std::path::PathBuf;
 use std::env;
+use std::path::PathBuf;
 
 use claude_code_transcripts::check_transcript;
 
 fn main() {
-    let path: PathBuf = env::args()
-        .nth(1)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            eprintln!("Usage: cargo run --example check_one -- <path/to/transcript.jsonl>");
-            std::process::exit(1);
-        });
+    let path: PathBuf = env::args().nth(1).map(PathBuf::from).unwrap_or_else(|| {
+        eprintln!("Usage: cargo run --example check_one -- <path/to/transcript.jsonl>");
+        std::process::exit(1);
+    });
 
     let result = check_transcript(&path);
     result.print_report();

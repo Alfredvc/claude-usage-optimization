@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use rayon::prelude::*;
 use walkdir::WalkDir;
 
-use claude_code_transcripts::{TranscriptResult, check_transcript};
+use claude_code_transcripts::{check_transcript, TranscriptResult};
 
 fn main() {
     let projects_dir = {
@@ -42,10 +42,8 @@ fn main() {
     let checked = AtomicUsize::new(0);
     let skipped_empty = AtomicUsize::new(0);
 
-    let failure: Option<(usize, TranscriptResult)> = files
-        .par_iter()
-        .enumerate()
-        .find_map_any(|(idx, path)| {
+    let failure: Option<(usize, TranscriptResult)> =
+        files.par_iter().enumerate().find_map_any(|(idx, path)| {
             let done = checked.fetch_add(1, Ordering::Relaxed) + 1;
             if done % 500 == 0 {
                 eprintln!("  {done}/{total_files}…");
@@ -75,7 +73,5 @@ fn main() {
 
     let checked = checked.load(Ordering::Relaxed);
     let skipped_empty = skipped_empty.load(Ordering::Relaxed);
-    println!(
-        "✓ {checked} files checked ({skipped_empty} empty/skipped) — all round-trip cleanly"
-    );
+    println!("✓ {checked} files checked ({skipped_empty} empty/skipped) — all round-trip cleanly");
 }

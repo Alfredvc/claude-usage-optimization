@@ -7,9 +7,9 @@
 
 pub mod types;
 
+use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::fs;
 
 use serde_json::Value;
 use types::Entry;
@@ -22,7 +22,7 @@ pub struct TranscriptResult {
     pub path: PathBuf,
     pub total: usize,
     pub ok: usize,
-    pub parse_errors: Vec<(usize, String, String)>,   // (line, type, err)
+    pub parse_errors: Vec<(usize, String, String)>, // (line, type, err)
     pub roundtrip_errors: Vec<(usize, String, Vec<Diff>)>,
     pub io_error: Option<String>,
 }
@@ -108,7 +108,9 @@ pub fn check_transcript(path: &Path) -> TranscriptResult {
         let raw: Value = match serde_json::from_str(&line) {
             Ok(v) => v,
             Err(e) => {
-                result.parse_errors.push((idx + 1, "(not json)".into(), e.to_string()));
+                result
+                    .parse_errors
+                    .push((idx + 1, "(not json)".into(), e.to_string()));
                 continue;
             }
         };
@@ -122,7 +124,9 @@ pub fn check_transcript(path: &Path) -> TranscriptResult {
         let entry: Entry = match serde_json::from_value(raw.clone()) {
             Ok(e) => e,
             Err(e) => {
-                result.parse_errors.push((idx + 1, entry_type, e.to_string()));
+                result
+                    .parse_errors
+                    .push((idx + 1, entry_type, e.to_string()));
                 continue;
             }
         };
@@ -130,7 +134,9 @@ pub fn check_transcript(path: &Path) -> TranscriptResult {
         let roundtripped: Value = match serde_json::to_value(&entry) {
             Ok(v) => v,
             Err(e) => {
-                result.parse_errors.push((idx + 1, entry_type, format!("re-serialize: {e}")));
+                result
+                    .parse_errors
+                    .push((idx + 1, entry_type, format!("re-serialize: {e}")));
                 continue;
             }
         };

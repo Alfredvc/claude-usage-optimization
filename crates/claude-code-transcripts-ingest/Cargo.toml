@@ -15,6 +15,9 @@ repository.workspace = true
 name = "cct"
 path = "src/main.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 axum = { workspace = true }
 tokio = { workspace = true }

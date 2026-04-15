@@ -18,6 +18,13 @@ use claude_code_transcripts::types::{
     UserContent, UserContentBlock,
 };
 
+/// Return type for per-entry row builders: an optional main-table row and
+/// zero or more child-table rows, each keyed by table name.
+type BuiltRows = (
+    Option<(&'static str, Vec<Value>)>,
+    Vec<(&'static str, Vec<Vec<Value>>)>,
+);
+
 // ─── Public types ────────────────────────────────────────────────────────
 
 pub struct EntryRows {
@@ -431,13 +438,7 @@ fn build_variant(
     e: &Entry,
     pricing: &HashMap<String, PriceRow>,
     unknown_models: &mut Vec<String>,
-) -> Result<
-    (
-        Option<(&'static str, Vec<Value>)>,
-        Vec<(&'static str, Vec<Vec<Value>>)>,
-    ),
-    String,
-> {
+) -> Result<BuiltRows, String> {
     match e {
         Entry::User(u) => Ok(build_user(u)),
         Entry::Assistant(a) => Ok(build_assistant(a, pricing, unknown_models)),
@@ -661,12 +662,7 @@ fn build_variant(
     }
 }
 
-fn build_user(
-    ue: &claude_code_transcripts::types::UserEntry,
-) -> (
-    Option<(&'static str, Vec<Value>)>,
-    Vec<(&'static str, Vec<Vec<Value>>)>,
-) {
+fn build_user(ue: &claude_code_transcripts::types::UserEntry) -> BuiltRows {
     let role = serde_json::to_value(&ue.message.role)
         .ok()
         .and_then(|v| v.as_str().map(|s| s.to_string()))
@@ -773,10 +769,7 @@ fn build_assistant(
     ae: &claude_code_transcripts::types::AssistantEntry,
     pricing: &HashMap<String, PriceRow>,
     unknown_models: &mut Vec<String>,
-) -> (
-    Option<(&'static str, Vec<Value>)>,
-    Vec<(&'static str, Vec<Vec<Value>>)>,
-) {
+) -> BuiltRows {
     let m = &ae.message;
     let role = serde_json::to_value(&m.role)
         .ok()
@@ -951,12 +944,7 @@ fn build_assistant(
     (Some(("assistant_entries", row)), children)
 }
 
-fn build_system(
-    se: &claude_code_transcripts::types::SystemEntry,
-) -> (
-    Option<(&'static str, Vec<Value>)>,
-    Vec<(&'static str, Vec<Vec<Value>>)>,
-) {
+fn build_system(se: &claude_code_transcripts::types::SystemEntry) -> BuiltRows {
     let subtype_str = serde_json::to_value(&se.subtype)
         .ok()
         .and_then(|v| v.as_str().map(|s| s.to_string()))
@@ -1020,12 +1008,7 @@ fn build_system(
     (Some(("system_entries", row)), children)
 }
 
-fn build_attachment(
-    ae: &claude_code_transcripts::types::AttachmentEntry,
-) -> (
-    Option<(&'static str, Vec<Value>)>,
-    Vec<(&'static str, Vec<Vec<Value>>)>,
-) {
+fn build_attachment(ae: &claude_code_transcripts::types::AttachmentEntry) -> BuiltRows {
     use AttachmentData::*;
     // Initialise wide row as all NULL then fill the relevant slots.
     let mut row: Vec<Value> = vec![Value::Null; 43];
@@ -1269,12 +1252,7 @@ fn build_attachment(
     (Some(("attachment_entries", row)), children)
 }
 
-fn build_progress(
-    pe: &claude_code_transcripts::types::ProgressEntry,
-) -> (
-    Option<(&'static str, Vec<Value>)>,
-    Vec<(&'static str, Vec<Vec<Value>>)>,
-) {
+fn build_progress(pe: &claude_code_transcripts::types::ProgressEntry) -> BuiltRows {
     let d = &pe.data;
     let row = vec![
         Value::Null,                      // entry_id

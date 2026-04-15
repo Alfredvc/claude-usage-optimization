@@ -316,10 +316,8 @@ fn entry_counts(conn: &Connection) -> HashMap<String, u64> {
         .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
         .unwrap_or_else(|e| die(format!("counts: {e}")));
     let mut out = HashMap::new();
-    for r in qrows {
-        if let Ok((k, v)) = r {
-            out.insert(k, v as u64);
-        }
+    for (k, v) in qrows.flatten() {
+        out.insert(k, v as u64);
     }
     out
 }

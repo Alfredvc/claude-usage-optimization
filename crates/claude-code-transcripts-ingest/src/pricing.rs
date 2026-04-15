@@ -58,10 +58,9 @@ struct TomlPriceRow {
 }
 
 pub fn load_overrides(path: &Path) -> Result<Vec<PriceRow>, String> {
-    let raw = std::fs::read_to_string(path)
-        .map_err(|e| format!("read {}: {e}", path.display()))?;
-    let parsed: PricingFile = toml::from_str(&raw)
-        .map_err(|e| format!("parse {}: {e}", path.display()))?;
+    let raw = std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let parsed: PricingFile =
+        toml::from_str(&raw).map_err(|e| format!("parse {}: {e}", path.display()))?;
     Ok(parsed
         .models
         .into_iter()
@@ -110,6 +109,7 @@ fn normalize_model(model: &str) -> &str {
 }
 
 /// Compute cost in USD given a model and usage breakdown.
+#[allow(clippy::too_many_arguments)]
 pub fn compute_cost(
     pricing: &HashMap<String, PriceRow>,
     model: &str,
