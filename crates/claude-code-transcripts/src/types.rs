@@ -263,21 +263,43 @@ pub enum UserContentBlock {
         #[serde(skip_serializing_if = "Option::is_none")]
         title: Option<String>,
     },
+
+    /// Catch-all for block types not yet recognised by the ingest binary.
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ImageSource {
-    Base64 { media_type: String, data: String },
-    Url { url: String },
+    Base64 {
+        media_type: String,
+        data: String,
+    },
+    Url {
+        url: String,
+    },
+    /// Catch-all for source types not yet recognised.
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DocumentSource {
-    Base64 { media_type: String, data: String },
-    Text { data: String },
-    Url { url: String },
+    Base64 {
+        media_type: String,
+        data: String,
+    },
+    Text {
+        data: String,
+    },
+    Url {
+        url: String,
+    },
+    /// Catch-all for source types not yet recognised.
+    #[serde(other)]
+    Unknown,
 }
 
 // ---------------------------------------------------------------------------
@@ -380,6 +402,10 @@ pub enum AssistantContentBlock {
         #[serde(skip_serializing_if = "Option::is_none")]
         caller: Option<ToolUseCaller>,
     },
+
+    /// Catch-all for content block types not yet recognised by the ingest binary.
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -781,6 +807,10 @@ pub enum AttachmentData {
         #[serde(rename = "commandMode", skip_serializing_if = "Option::is_none")]
         command_mode: Option<String>,
     },
+
+    /// Catch-all for attachment types not yet recognised by the ingest binary.
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1207,5 +1237,60 @@ mod opt_nullable {
         D: Deserializer<'de>,
     {
         Ok(Some(Option::<Value>::deserialize(de)?))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn attachment_data_unknown_variant() {
+        let json = r#"{"type":"nested_memory","some_field":42}"#;
+        let v: AttachmentData = serde_json::from_str(json).unwrap();
+        assert!(matches!(v, AttachmentData::Unknown));
+    }
+
+    #[test]
+    fn assistant_content_block_unknown_variant() {
+        let json = r#"{"type":"future_modality","data":"foo"}"#;
+        let v: AssistantContentBlock = serde_json::from_str(json).unwrap();
+        assert!(matches!(v, AssistantContentBlock::Unknown));
+    }
+
+    #[test]
+    fn user_content_block_unknown_variant() {
+        let json = r#"{"type":"video","url":"https://example.com"}"#;
+        let v: UserContentBlock = serde_json::from_str(json).unwrap();
+        assert!(matches!(v, UserContentBlock::Unknown));
+    }
+
+    #[test]
+    fn image_source_unknown_variant() {
+        let json = r#"{"type":"s3_bucket","key":"foo"}"#;
+        let v: ImageSource = serde_json::from_str(json).unwrap();
+        assert!(matches!(v, ImageSource::Unknown));
+    }
+
+    #[test]
+    fn document_source_unknown_variant() {
+        let json = r#"{"type":"pdf","data":"base64data"}"#;
+        let v: DocumentSource = serde_json::from_str(json).unwrap();
+        assert!(matches!(v, DocumentSource::Unknown));
+    }
+
+    // Verify known variants still parse correctly after adding Unknown.
+    #[test]
+    fn attachment_data_known_variant_unaffected() {
+        let json = r#"{"type":"date_change","newDate":"2024-01-01"}"#;
+        let v: AttachmentData = serde_json::from_str(json).unwrap();
+        assert!(matches!(v, AttachmentData::DateChange { .. }));
+    }
+
+    #[test]
+    fn assistant_content_block_known_variant_unaffected() {
+        let json = r#"{"type":"text","text":"hello"}"#;
+        let v: AssistantContentBlock = serde_json::from_str(json).unwrap();
+        assert!(matches!(v, AssistantContentBlock::Text { .. }));
     }
 }

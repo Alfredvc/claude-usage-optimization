@@ -41,6 +41,8 @@ pub struct ParsedFile {
     pub entries: Vec<EntryRows>,
     pub failures: Vec<(usize, String)>,
     pub unknown_models: Vec<String>,
+    /// Enum names that had unrecognised variants dropped during parsing.
+    pub unknown_variants: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -177,6 +179,7 @@ pub fn parse_file(path: &Path, pricing: &HashMap<String, PriceRow>) -> ParsedFil
     let mut last_ts: Option<String> = None;
     let mut session_id: Option<String> = None;
     let mut unknown_models: Vec<String> = Vec::new();
+    let mut unknown_variants: Vec<String> = Vec::new();
 
     let mtime = fs::metadata(path)
         .ok()
@@ -206,6 +209,7 @@ pub fn parse_file(path: &Path, pricing: &HashMap<String, PriceRow>) -> ParsedFil
                 entries,
                 failures,
                 unknown_models,
+                unknown_variants,
             };
         }
     };
@@ -254,6 +258,7 @@ pub fn parse_file(path: &Path, pricing: &HashMap<String, PriceRow>) -> ParsedFil
             &mut first_ts,
             &mut last_ts,
             &mut unknown_models,
+            &mut unknown_variants,
         ) {
             Ok(rows) => entries.push(rows),
             Err(e) => failures.push((line_no, e)),
@@ -276,6 +281,7 @@ pub fn parse_file(path: &Path, pricing: &HashMap<String, PriceRow>) -> ParsedFil
         entries,
         failures,
         unknown_models,
+        unknown_variants,
     }
 }
 
@@ -289,6 +295,7 @@ fn build_rows(
     first_ts: &mut Option<String>,
     last_ts: &mut Option<String>,
     unknown_models: &mut Vec<String>,
+    unknown_variants: &mut Vec<String>,
 ) -> Result<EntryRows, String> {
     // entries table column order:
     //   entry_id, file_path, line_no, type, subtype,
@@ -351,7 +358,7 @@ fn build_rows(
     }
 
     // Variant + child rows
-    let (variant, children) = build_variant(entry, pricing, unknown_models)?;
+    let (variant, children) = build_variant(entry, pricing, unknown_models, unknown_variants)?;
 
     Ok(EntryRows {
         entry: e_row,
@@ -438,12 +445,18 @@ fn build_variant(
     e: &Entry,
     pricing: &HashMap<String, PriceRow>,
     unknown_models: &mut Vec<String>,
+    unknown_variants: &mut Vec<String>,
 ) -> Result<BuiltRows, String> {
     match e {
-        Entry::User(u) => Ok(build_user(u)),
-        Entry::Assistant(a) => Ok(build_assistant(a, pricing, unknown_models)),
+        Entry::User(u) => Ok(build_user(u, unknown_variants)),
+        Entry::Assistant(a) => Ok(build_assistant(
+            a,
+            pricing,
+            unknown_models,
+            unknown_variants,
+        )),
         Entry::System(s) => Ok(build_system(s)),
-        Entry::Attachment(a) => Ok(build_attachment(a)),
+        Entry::Attachment(a) => Ok(build_attachment(a, unknown_variants)),
         Entry::Progress(p) => Ok(build_progress(p)),
         Entry::PermissionMode(x) => Ok((
             Some((
@@ -662,7 +675,10 @@ fn build_variant(
     }
 }
 
-fn build_user(ue: &claude_code_transcripts::types::UserEntry) -> BuiltRows {
+fn build_user(
+    ue: &claude_code_transcripts::types::UserEntry,
+    unknown_variants: &mut Vec<String>,
+) -> BuiltRows {
     let role = serde_json::to_value(&ue.message.role)
         .ok()
         .and_then(|v| v.as_str().map(|s| s.to_string()))
@@ -725,30 +741,50 @@ fn build_user(ue: &claude_code_transcripts::types::UserEntry) -> BuiltRows {
                 Value::Null,
                 Value::Null,
             ],
-            UserContentBlock::Image { source } => vec![
-                Value::Null,
-                u(pos),
-                s_str("image"),
-                Value::Null,
-                Value::Null,
-                Value::Null,
-                Value::Null,
-                ojson_serializable(Some(source)),
-                Value::Null,
-                Value::Null,
-            ],
-            UserContentBlock::Document { source, title } => vec![
-                Value::Null,
-                u(pos),
-                s_str("document"),
-                Value::Null,
-                Value::Null,
-                Value::Null,
-                Value::Null,
-                Value::Null,
-                ojson_serializable(Some(source)),
-                s(title.clone()),
-            ],
+            UserContentBlock::Image { source } => {
+                let source_json = if matches!(source, ImageSource::Unknown) {
+                    unknown_variants.push("ImageSource".to_string());
+                    Value::Null
+                } else {
+                    ojson_serializable(Some(source))
+                };
+                vec![
+                    Value::Null,
+                    u(pos),
+                    s_str("image"),
+                    Value::Null,
+                    Value::Null,
+                    Value::Null,
+                    Value::Null,
+                    source_json,
+                    Value::Null,
+                    Value::Null,
+                ]
+            }
+            UserContentBlock::Document { source, title } => {
+                let source_json = if matches!(source, DocumentSource::Unknown) {
+                    unknown_variants.push("DocumentSource".to_string());
+                    Value::Null
+                } else {
+                    ojson_serializable(Some(source))
+                };
+                vec![
+                    Value::Null,
+                    u(pos),
+                    s_str("document"),
+                    Value::Null,
+                    Value::Null,
+                    Value::Null,
+                    Value::Null,
+                    Value::Null,
+                    source_json,
+                    s(title.clone()),
+                ]
+            }
+            UserContentBlock::Unknown => {
+                unknown_variants.push("UserContentBlock".to_string());
+                continue;
+            }
         };
         let _ = (
             std::any::type_name::<ImageSource>(),
@@ -769,6 +805,7 @@ fn build_assistant(
     ae: &claude_code_transcripts::types::AssistantEntry,
     pricing: &HashMap<String, PriceRow>,
     unknown_models: &mut Vec<String>,
+    unknown_variants: &mut Vec<String>,
 ) -> BuiltRows {
     let m = &ae.message;
     let role = serde_json::to_value(&m.role)
@@ -899,6 +936,10 @@ fn build_assistant(
                 json_str(input),
                 s(caller.as_ref().map(|c| c.caller_type.clone())),
             ],
+            AssistantContentBlock::Unknown => {
+                unknown_variants.push("AssistantContentBlock".to_string());
+                continue;
+            }
         };
         block_rows.push(row);
     }
@@ -1008,7 +1049,10 @@ fn build_system(se: &claude_code_transcripts::types::SystemEntry) -> BuiltRows {
     (Some(("system_entries", row)), children)
 }
 
-fn build_attachment(ae: &claude_code_transcripts::types::AttachmentEntry) -> BuiltRows {
+fn build_attachment(
+    ae: &claude_code_transcripts::types::AttachmentEntry,
+    unknown_variants: &mut Vec<String>,
+) -> BuiltRows {
     use AttachmentData::*;
     // Initialise wide row as all NULL then fill the relevant slots.
     let mut row: Vec<Value> = vec![Value::Null; 43];
@@ -1040,6 +1084,7 @@ fn build_attachment(ae: &claude_code_transcripts::types::AttachmentEntry) -> Bui
         McpInstructionsDelta { .. } => "mcp_instructions_delta",
         UltrathinkEffort { .. } => "ultrathink_effort",
         QueuedCommand { .. } => "queued_command",
+        Unknown => "unknown",
     };
     row[1] = s_str(attach_type);
 
@@ -1240,6 +1285,9 @@ fn build_attachment(ae: &claude_code_transcripts::types::AttachmentEntry) -> Bui
             row[41] = s_str(prompt);
             row[42] = s(command_mode.clone());
         }
+        Unknown => {
+            unknown_variants.push("AttachmentData".to_string());
+        }
     }
 
     let mut children: Vec<(&'static str, Vec<Vec<Value>>)> = Vec::new();
@@ -1288,4 +1336,164 @@ fn build_progress(pe: &claude_code_transcripts::types::ProgressEntry) -> BuiltRo
 #[allow(dead_code)]
 fn _silence_unused_path() -> PathBuf {
     PathBuf::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Writes content to a uniquely-named temp file and deletes it on drop.
+    struct TempJsonl(PathBuf);
+
+    impl TempJsonl {
+        fn new(content: &str) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "cct-test-{}-{}.jsonl",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .subsec_nanos()
+            ));
+            std::fs::write(&path, content).unwrap();
+            TempJsonl(path)
+        }
+    }
+
+    impl Drop for TempJsonl {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    // Minimal envelope fields shared by all test lines.
+    const ENVELOPE: &str = r#""parentUuid":null,"isSidechain":false,"sessionId":"test-session","timestamp":"2024-01-01T00:00:00.000000Z""#;
+
+    #[test]
+    fn unknown_attachment_type_is_dropped_not_failed() {
+        let line = format!(
+            r#"{{"type":"attachment","uuid":"a1",{ENVELOPE},"attachment":{{"type":"nested_memory","payload":"foo"}}}}"#
+        );
+        let tmp = TempJsonl::new(&line);
+        let parsed = parse_file(&tmp.0, &HashMap::new());
+
+        assert!(
+            parsed.failures.is_empty(),
+            "unexpected failures: {:?}",
+            parsed.failures
+        );
+        assert_eq!(parsed.entries.len(), 1, "entry should still be ingested");
+        assert!(
+            parsed
+                .unknown_variants
+                .contains(&"AttachmentData".to_string()),
+            "expected AttachmentData in unknown_variants, got {:?}",
+            parsed.unknown_variants
+        );
+    }
+
+    #[test]
+    fn unknown_assistant_content_block_is_dropped_not_failed() {
+        let line = format!(
+            r#"{{"type":"assistant","uuid":"b1",{ENVELOPE},"message":{{"id":"msg1","type":"message","role":"assistant","model":"claude-3-opus-20240229","content":[{{"type":"future_modality","data":"ignored"}}],"stop_reason":"end_turn","stop_sequence":null,"usage":{{"input_tokens":10,"output_tokens":5}}}}}}"#
+        );
+        let tmp = TempJsonl::new(&line);
+        let parsed = parse_file(&tmp.0, &HashMap::new());
+
+        assert!(
+            parsed.failures.is_empty(),
+            "unexpected failures: {:?}",
+            parsed.failures
+        );
+        assert_eq!(parsed.entries.len(), 1);
+        assert!(
+            parsed
+                .unknown_variants
+                .contains(&"AssistantContentBlock".to_string()),
+            "got {:?}",
+            parsed.unknown_variants
+        );
+    }
+
+    #[test]
+    fn unknown_user_content_block_is_dropped_not_failed() {
+        let line = format!(
+            r#"{{"type":"user","uuid":"c1",{ENVELOPE},"message":{{"role":"user","content":[{{"type":"video","url":"https://example.com"}}]}}}}"#
+        );
+        let tmp = TempJsonl::new(&line);
+        let parsed = parse_file(&tmp.0, &HashMap::new());
+
+        assert!(
+            parsed.failures.is_empty(),
+            "unexpected failures: {:?}",
+            parsed.failures
+        );
+        assert_eq!(parsed.entries.len(), 1);
+        assert!(
+            parsed
+                .unknown_variants
+                .contains(&"UserContentBlock".to_string()),
+            "got {:?}",
+            parsed.unknown_variants
+        );
+    }
+
+    #[test]
+    fn unknown_image_source_type_is_dropped_not_failed() {
+        let line = format!(
+            r#"{{"type":"user","uuid":"d1",{ENVELOPE},"message":{{"role":"user","content":[{{"type":"image","source":{{"type":"s3_bucket","key":"test"}}}}]}}}}"#
+        );
+        let tmp = TempJsonl::new(&line);
+        let parsed = parse_file(&tmp.0, &HashMap::new());
+
+        assert!(
+            parsed.failures.is_empty(),
+            "unexpected failures: {:?}",
+            parsed.failures
+        );
+        assert_eq!(parsed.entries.len(), 1);
+        assert!(
+            parsed.unknown_variants.contains(&"ImageSource".to_string()),
+            "got {:?}",
+            parsed.unknown_variants
+        );
+    }
+
+    #[test]
+    fn unknown_document_source_type_is_dropped_not_failed() {
+        let line = format!(
+            r#"{{"type":"user","uuid":"e1",{ENVELOPE},"message":{{"role":"user","content":[{{"type":"document","source":{{"type":"pdf_url","url":"https://example.com/doc.pdf"}}}}]}}}}"#
+        );
+        let tmp = TempJsonl::new(&line);
+        let parsed = parse_file(&tmp.0, &HashMap::new());
+
+        assert!(
+            parsed.failures.is_empty(),
+            "unexpected failures: {:?}",
+            parsed.failures
+        );
+        assert_eq!(parsed.entries.len(), 1);
+        assert!(
+            parsed
+                .unknown_variants
+                .contains(&"DocumentSource".to_string()),
+            "got {:?}",
+            parsed.unknown_variants
+        );
+    }
+
+    /// Regression: the exact variant that caused the original bug report.
+    #[test]
+    fn nested_memory_attachment_regression() {
+        let line = format!(
+            r#"{{"type":"attachment","uuid":"f1",{ENVELOPE},"attachment":{{"type":"nested_memory","data":"anything"}}}}"#
+        );
+        let tmp = TempJsonl::new(&line);
+        let parsed = parse_file(&tmp.0, &HashMap::new());
+
+        assert!(
+            parsed.failures.is_empty(),
+            "nested_memory should not produce a parse failure"
+        );
+    }
 }

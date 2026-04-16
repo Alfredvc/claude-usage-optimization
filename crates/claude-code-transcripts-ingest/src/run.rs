@@ -72,6 +72,8 @@ pub fn run(cli: IngestArgs) -> ! {
     let processed = Arc::new(AtomicUsize::new(0));
     let unknown_models_global: Arc<std::sync::Mutex<HashMap<String, u64>>> =
         Arc::new(std::sync::Mutex::new(HashMap::new()));
+    let unknown_variants_global: Arc<std::sync::Mutex<HashMap<String, u64>>> =
+        Arc::new(std::sync::Mutex::new(HashMap::new()));
 
     let stop_progress = Arc::new(AtomicBool::new(false));
     let progress_handle = if !cli.no_progress {
@@ -136,6 +138,12 @@ pub fn run(cli: IngestArgs) -> ! {
                 let mut g = unknown_models_global.lock().unwrap();
                 for m in &parsed.unknown_models {
                     *g.entry(m.clone()).or_insert(0) += 1;
+                }
+            }
+            if !parsed.unknown_variants.is_empty() {
+                let mut g = unknown_variants_global.lock().unwrap();
+                for v in &parsed.unknown_variants {
+                    *g.entry(v.clone()).or_insert(0) += 1;
                 }
             }
 
@@ -234,6 +242,15 @@ pub fn run(cli: IngestArgs) -> ! {
             eprintln!("  - {k}  (count={})", unknown[k]);
         }
     }
+    let unknown_vars = unknown_variants_global.lock().unwrap();
+    if !unknown_vars.is_empty() {
+        eprintln!("Unknown variants dropped (schema needs update):");
+        let mut keys: Vec<&String> = unknown_vars.keys().collect();
+        keys.sort();
+        for k in keys {
+            eprintln!("  - {k}  (count={})", unknown_vars[k]);
+        }
+    }
     let elapsed = started.elapsed();
     let h = elapsed.as_secs() / 3600;
     let m = (elapsed.as_secs() % 3600) / 60;
@@ -241,6 +258,7 @@ pub fn run(cli: IngestArgs) -> ! {
     eprintln!("Elapsed:      {h:02}:{m:02}:{s:02}");
 
     drop(conn);
+
     std::process::exit(0);
 }
 
