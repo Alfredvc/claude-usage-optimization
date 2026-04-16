@@ -45,6 +45,13 @@ pub fn run(cli: IngestArgs) -> ! {
 
     remove_db_files(&cli.output);
 
+    if let Some(parent) = cli.output.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)
+                .unwrap_or_else(|e| die(format!("create {}: {e}", parent.display())));
+        }
+    }
+
     let files = discover(&cli.input_dir);
     let total_files = files.len();
     eprintln!(

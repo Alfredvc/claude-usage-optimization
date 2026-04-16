@@ -9,6 +9,20 @@ fn default_input_dir() -> PathBuf {
     PathBuf::from(home).join(".claude").join("projects")
 }
 
+fn default_output_db() -> PathBuf {
+    let data_home = std::env::var("XDG_DATA_HOME")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            let home = std::env::var("HOME")
+                .or_else(|_| std::env::var("USERPROFILE"))
+                .unwrap_or_else(|_| ".".to_string());
+            PathBuf::from(home).join(".local").join("share")
+        });
+    data_home.join("cct").join("transcripts.duckdb")
+}
+
 #[derive(Parser, Debug)]
 #[command(
     name = "cct",
@@ -26,6 +40,8 @@ pub enum Command {
     Ingest(IngestArgs),
     /// Serve the transcript viewer web UI
     Serve(ServeArgs),
+    /// Show DB path, size, and entry counts
+    Info(InfoArgs),
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -39,7 +55,7 @@ pub struct IngestArgs {
     pub jobs: usize,
 
     /// Output DuckDB filename. Overwritten on every run.
-    #[arg(short = 'o', long = "output", default_value = "./transcripts.duckdb")]
+    #[arg(short = 'o', long = "output", default_value_os_t = default_output_db())]
     pub output: PathBuf,
 
     /// TOML file overriding/extending the seeded model_pricing table.
@@ -54,10 +70,17 @@ pub struct IngestArgs {
 #[derive(Parser, Debug)]
 pub struct ServeArgs {
     /// DuckDB database file to serve.
-    #[arg(long = "db", default_value = "./transcripts.duckdb")]
+    #[arg(long = "db", default_value_os_t = default_output_db())]
     pub db: PathBuf,
 
     /// Port to listen on.
     #[arg(long = "port", default_value_t = 8766)]
     pub port: u16,
+}
+
+#[derive(Parser, Debug)]
+pub struct InfoArgs {
+    /// DuckDB database file to inspect.
+    #[arg(long = "db", default_value_os_t = default_output_db())]
+    pub db: PathBuf,
 }

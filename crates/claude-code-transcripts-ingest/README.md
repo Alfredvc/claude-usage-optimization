@@ -22,7 +22,7 @@ self-contained but takes a minute or two the first time.
 ## Quick start
 
 ```sh
-cct ingest                # scans ~/.claude/projects → ./transcripts.duckdb
+cct ingest                # scans ~/.claude/projects → ~/.local/share/cct/transcripts.duckdb
 cct serve                 # viewer at http://localhost:8766
 ```
 
@@ -37,7 +37,7 @@ cct ingest [-i <dir>] [-o <file>] [-j <jobs>] [--pricing <toml>] [--no-progress]
 | Flag | Default | Meaning |
 |---|---|---|
 | `-i, --input-dir` | `~/.claude/projects` | Directory scanned recursively for `.jsonl` |
-| `-o, --output` | `./transcripts.duckdb` | Output DuckDB file (overwritten each run) |
+| `-o, --output` | `~/.local/share/cct/transcripts.duckdb` (`$XDG_DATA_HOME/cct/transcripts.duckdb`) | Output DuckDB file (overwritten each run) |
 | `-j, --jobs` | `0` (logical CPUs) | Parallel worker threads |
 | `--pricing` | — | TOML overriding the seeded `model_pricing` table |
 | `--no-progress` | — | Silence per-second progress on stderr |
@@ -50,7 +50,7 @@ cct serve [--db <file>] [--port <n>]
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--db` | `./transcripts.duckdb` | DB file to serve |
+| `--db` | `~/.local/share/cct/transcripts.duckdb` (`$XDG_DATA_HOME/cct/transcripts.duckdb`) | DB file to serve |
 | `--port` | `8766` | Listen port |
 
 #### Transcripts
@@ -91,6 +91,18 @@ A multi-panel cost dashboard split into two sub-tabs. Switch between them with t
 - Session Distribution (by turn count)
 
 ![cct serve dashboard](https://raw.githubusercontent.com/alfredvc/claude-usage-optimization/main/docs/assets/dashboard.png)
+
+### `cct info`
+
+```
+cct info [--db <file>]
+```
+
+Prints the DB path, file size, entry count, session count, and last ingest timestamp. Useful for confirming the DB location and freshness without opening DuckDB manually.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--db` | `~/.local/share/cct/transcripts.duckdb` (`$XDG_DATA_HOME/cct/transcripts.duckdb`) | DB file to inspect |
 
 Run `cct --help` / `cct <subcommand> --help` for the authoritative flag list.
 

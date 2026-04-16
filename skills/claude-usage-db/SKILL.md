@@ -1,11 +1,11 @@
 ---
 name: claude-usage-db
-description: Query the project's local DuckDB of ingested Claude Code transcripts (`transcripts.duckdb` at the repo root) to answer any question about sessions, costs, tokens, tools, models, cache hits, subagents, skills invoked, permission modes, or raw conversation data. Use this skill whenever the user wants to run SQL against that DB or asks analytical questions whose answer lives in it — "show me sessions from last week", "cost breakdown by model", "which tools did I call most", "how much on Opus yesterday", "pull the raw data", "find sessions where…", "longest sessions", "top Bash commands", "top files edited", "cache hit rate", "what skills have I used", "first-turn cache creation", "main-chain vs subagent cost", or any aggregate/filter/ranking over transcripts. Do NOT use for advice-shaped questions like "how do I reduce my spend" (that belongs to `optimize-usage`), for rebuilding the DB (that's the `cct` binary), or for questions about the transcripts file format itself. The DB has one critical billing footgun (raw `assistant_entries` overcounts cost ~2×) — this skill prevents it.
+description: Query the local DuckDB of ingested Claude Code transcripts (`~/.local/share/cct/transcripts.duckdb` by default, or `$XDG_DATA_HOME/cct/transcripts.duckdb`) to answer any question about sessions, costs, tokens, tools, models, cache hits, subagents, skills invoked, permission modes, or raw conversation data. Use this skill whenever the user wants to run SQL against that DB or asks analytical questions whose answer lives in it — "show me sessions from last week", "cost breakdown by model", "which tools did I call most", "how much on Opus yesterday", "pull the raw data", "find sessions where…", "longest sessions", "top Bash commands", "top files edited", "cache hit rate", "what skills have I used", "first-turn cache creation", "main-chain vs subagent cost", or any aggregate/filter/ranking over transcripts. Do NOT use for advice-shaped questions like "how do I reduce my spend" (that belongs to `optimize-usage`), for rebuilding the DB (that's the `cct` binary), or for questions about the transcripts file format itself. The DB has one critical billing footgun (raw `assistant_entries` overcounts cost ~2×) — this skill prevents it.
 ---
 
 # Querying the Claude transcripts DuckDB
 
-`transcripts.duckdb` (≈2 GB, at the repo root) is produced by the `cct` binary (this repo's Rust ingest tool) parsing Claude Code JSONL transcripts from `~/.claude/projects/`. Every assistant turn, user turn, tool call, hook event, and metadata record across all sessions lives here, typed and indexed.
+`transcripts.duckdb` (≈2 GB) is produced by the `cct` binary (this repo's Rust ingest tool) parsing Claude Code JSONL transcripts from `~/.claude/projects/`. By default it lives at `~/.local/share/cct/transcripts.duckdb` (or `$XDG_DATA_HOME/cct/transcripts.duckdb` if that env var is set). Every assistant turn, user turn, tool call, hook event, and metadata record across all sessions lives here, typed and indexed.
 
 Both `cct` and `duckdb` are required. If either is missing, see [Prerequisites](#prerequisites-cct-and-duckdb).
 
@@ -559,9 +559,12 @@ curl https://install.duckdb.org | sh
 
 ### Locate the DB
 
-If the user already gave a path, use it and skip this section. Otherwise:
+If the user already gave a path, use it and skip this section. Otherwise check in order:
 
 ```bash
+# XDG default (what cct ingest writes to by default)
+ls -1 "${XDG_DATA_HOME:-$HOME/.local/share}/cct/transcripts.duckdb" 2>/dev/null
+# legacy / manually placed
 ls -1 ./transcripts.duckdb 2>/dev/null
 ls -1 ./*.duckdb 2>/dev/null
 find . -maxdepth 3 -name '*.duckdb' -not -path '*/target/*' 2>/dev/null
@@ -569,11 +572,11 @@ find . -maxdepth 3 -name '*.duckdb' -not -path '*/target/*' 2>/dev/null
 
 Branches:
 
-- **`./transcripts.duckdb` exists** → use it. Only re-check freshness (`SELECT MAX(timestamp) FROM entries`) when the user is asking about "recent" / "today" / "latest session" — pure historical analytics don't need it.
-- **A different `*.duckdb` file exists** → ask the user whether it's the transcripts DB before querying.
-- **No `*.duckdb` found** → ask where the DB lives, or whether to generate one now with `cct ingest`. Don't silently run `cct ingest` — it scans `~/.claude/projects/` and writes a multi-GB file into cwd.
+- **`~/.local/share/cct/transcripts.duckdb` (or `$XDG_DATA_HOME/cct/transcripts.duckdb`) exists** → use it. This is the default output of `cct ingest`. Only re-check freshness (`SELECT MAX(timestamp) FROM entries`) when the user is asking about "recent" / "today" / "latest session" — pure historical analytics don't need it.
+- **`./transcripts.duckdb` or another `*.duckdb` exists** → ask the user whether it's the transcripts DB before querying.
+- **No `*.duckdb` found** → ask where the DB lives, or whether to generate one now with `cct ingest`. Don't silently run `cct ingest` — it scans `~/.claude/projects/` and writes a multi-GB file to `~/.local/share/cct/transcripts.duckdb`.
 
-Once confirmed, use the same path in every `duckdb <path>` invocation. `cct ingest` is incremental (only new entries) so it's cheap to rerun mid-session.
+Once confirmed, use the same path in every `duckdb <path>` invocation. `cct ingest` **overwrites** the DB from scratch on every run — it is not incremental.
 
 ---
 

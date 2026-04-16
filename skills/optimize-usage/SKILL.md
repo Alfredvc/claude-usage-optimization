@@ -7,7 +7,7 @@ description: Investigate a user's Claude Code setup to find ROOT causes of spend
 
 ## What this skill is for
 
-Investigate a user's Claude Code setup (via the transcripts DuckDB at the repo root) to find **root causes** of cost, then translate them into **behavior changes** the user can actually make. The goal is not a breakdown; the goal is to change their bill.
+Investigate a user's Claude Code setup (via the transcripts DuckDB at `~/.local/share/cct/transcripts.duckdb` by default) to find **root causes** of cost, then translate them into **behavior changes** the user can actually make. The goal is not a breakdown; the goal is to change their bill.
 
 Category rollups ("cost by model", "cost by project") are trivially produced and trivially misleading. They say where money went, not why. The why lives in the workflow — which skills run, what artifacts they produce, how those artifacts propagate to subagents, how they sit in context for what fraction of a session, whether the cache prefix is being invalidated mid-session, which system-prompt bloat (MCP schemas, hooks, CLAUDE.md) gets re-cached every turn. That chain is what you must reconstruct.
 
