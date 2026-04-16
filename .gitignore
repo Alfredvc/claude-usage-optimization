@@ -2,3 +2,7 @@
 /.claude/
 /test/
 *.duckdb
+*.duckdb.tmp/
+*.parquet
+.DS_Store
+out/
