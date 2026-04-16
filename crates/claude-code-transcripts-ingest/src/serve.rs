@@ -110,18 +110,6 @@ fn extract_tool_result_text(json_str: &str) -> String {
     }
 }
 
-fn extract_agent_id(text: &str) -> Option<String> {
-    for line in text.lines() {
-        if let Some(rest) = line.trim().strip_prefix("agentId:") {
-            let id = rest.trim();
-            if !id.is_empty() {
-                return Some(id.to_owned());
-            }
-        }
-    }
-    None
-}
-
 fn summarize_input(name: &str, input: &Value) -> String {
     let short = |p: &str| -> String {
         let parts: Vec<&str> = p.split('/').collect();
@@ -339,7 +327,7 @@ async fn api_transcript(State(state): State<AppState>, Query(q): Query<Transcrip
     let result = spawn_blocking(move || -> Result<Value, String> {
         let conn = open_db(&db_path)?;
         let fp = session_file_path(&conn, &session, false, None)?;
-        build_timeline(&conn, &fp)
+        build_timeline(&conn, &fp, false)
     })
     .await;
 
@@ -366,7 +354,7 @@ async fn api_subagent(State(state): State<AppState>, Query(q): Query<SubagentQ>)
     let result = spawn_blocking(move || -> Result<Value, String> {
         let conn = open_db(&db_path)?;
         let fp = session_file_path(&conn, &session, true, Some(&agent))?;
-        build_timeline(&conn, &fp)
+        build_timeline(&conn, &fp, true)
     })
     .await;
 
@@ -418,7 +406,7 @@ const INJECTED: &[&str] = &[
     "<system-reminder>",
 ];
 
-fn build_timeline(conn: &Connection, file_path: &str) -> Result<Value, String> {
+fn build_timeline(conn: &Connection, file_path: &str, is_subagent: bool) -> Result<Value, String> {
     // ── entries ───────────────────────────────────────────────────────────────
     struct EntryRow {
         entry_id: i64,
@@ -503,29 +491,67 @@ fn build_timeline(conn: &Connection, file_path: &str) -> Result<Value, String> {
         }
     }
 
-    // ── tool results: tool_use_id → text ─────────────────────────────────────
-    let mut tool_results: HashMap<String, String> = HashMap::new();
-    {
+    // ── subagent costs: agent_id → cost_usd (parent sessions only) ──────────
+    let mut subagent_costs: HashMap<String, f64> = HashMap::new();
+    if !is_subagent {
         let mut stmt = conn
             .prepare(
-                "SELECT tool_use_id, tool_result_content \
-             FROM user_content_blocks \
-             WHERE entry_id IN (SELECT entry_id FROM entries WHERE file_path = ?) \
-               AND block_type = 'tool_result' AND tool_use_id IS NOT NULL",
+                "SELECT t2.agent_id, ROUND(COALESCE(SUM(d.cost_usd), 0.0), 6) \
+                 FROM transcripts t_parent \
+                 JOIN transcripts t2 ON t2.parent_session_id = t_parent.session_id \
+                 JOIN entries e ON e.file_path = t2.file_path \
+                 JOIN assistant_entries_deduped d ON d.entry_id = e.entry_id AND d.message_id IS NOT NULL \
+                 WHERE t_parent.file_path = ? AND NOT t_parent.is_subagent \
+                   AND t2.is_subagent AND t2.agent_id IS NOT NULL \
+                 GROUP BY t2.agent_id",
             )
             .map_err(|e| e.to_string())?;
         let rows = stmt
             .query_map([file_path], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+                Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
             })
             .map_err(|e| e.to_string())?;
         for r in rows.filter_map(|r| r.ok()) {
-            let (tu_id, content_json) = r;
+            let (aid, cost) = r;
+            subagent_costs.insert(aid, cost);
+        }
+    }
+
+    // ── tool results: tool_use_id → (text, agent_id) ─────────────────────────
+    let mut tool_results: HashMap<String, String> = HashMap::new();
+    let mut tool_agent_ids: HashMap<String, String> = HashMap::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT ucb.tool_use_id, ucb.tool_result_content, \
+                        json_extract_string(ue.tool_use_result, '$.agentId') AS agent_id \
+                 FROM user_content_blocks ucb \
+                 JOIN user_entries ue ON ue.entry_id = ucb.entry_id \
+                 WHERE ucb.entry_id IN (SELECT entry_id FROM entries WHERE file_path = ?) \
+                   AND ucb.block_type = 'tool_result' AND ucb.tool_use_id IS NOT NULL",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([file_path], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        for r in rows.filter_map(|r| r.ok()) {
+            let (tu_id, content_json, agent_id) = r;
             let text = content_json
                 .as_deref()
                 .map(extract_tool_result_text)
                 .unwrap_or_default();
-            tool_results.insert(tu_id, text);
+            tool_results.insert(tu_id.clone(), text);
+            if let Some(aid) = agent_id {
+                if !aid.is_empty() {
+                    tool_agent_ids.insert(tu_id, aid);
+                }
+            }
         }
     }
 
@@ -668,7 +694,7 @@ fn build_timeline(conn: &Connection, file_path: &str) -> Result<Value, String> {
     let mut api_num: i64 = 0;
 
     for e in &entry_rows {
-        if e.is_sidechain || e.is_meta {
+        if (!is_subagent && e.is_sidechain) || e.is_meta {
             continue;
         }
 
@@ -725,14 +751,19 @@ fn build_timeline(conn: &Connection, file_path: &str) -> Result<Value, String> {
                         let input = b.tu_input.clone().unwrap_or(json!({}));
                         let summary = summarize_input(name, &input);
                         let result = tool_results.get(id).cloned().unwrap_or_default();
-                        let agent_id = extract_agent_id(&result);
+                        let agent_id = tool_agent_ids.get(id).cloned();
+                        let subagent_cost = agent_id
+                            .as_ref()
+                            .and_then(|aid| subagent_costs.get(aid))
+                            .copied();
                         Some(json!({
-                            "id":       id,
-                            "name":     name,
-                            "summary":  summary,
-                            "input":    input,
-                            "result":   result,
-                            "agent_id": agent_id,
+                            "id":                id,
+                            "name":              name,
+                            "summary":           summary,
+                            "input":             input,
+                            "result":            result,
+                            "agent_id":          agent_id,
+                            "subagent_cost_usd": subagent_cost,
                         }))
                     })
                     .collect();
