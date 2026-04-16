@@ -1211,6 +1211,9 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
     cache:   buildUrl('/api/dashboard/cache', timeRange),
     agents:  buildUrl('/api/dashboard/agents', timeRange),
     top:     buildUrl('/api/dashboard/top-sessions', timeRange),
+    dist:    buildUrl('/api/dashboard/session-distribution', timeRange),
+    files:   buildUrl('/api/dashboard/file-hotspots', timeRange),
+    errors:  buildUrl('/api/dashboard/errors', timeRange),
   }), [timeRange]);
   const summary = usePanel(urls.summary);
   const daily   = usePanel(urls.daily);
@@ -1218,6 +1221,9 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
   const cache   = usePanel(urls.cache);
   const agents  = usePanel(urls.agents);
   const top     = usePanel(urls.top);
+  const dist    = usePanel(urls.dist);
+  const files   = usePanel(urls.files);
+  const errors  = usePanel(urls.errors);
 
   return (
     <>
@@ -1236,31 +1242,6 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
       <Panel title="Agent Model Usage" loading={agents.loading} err={agents.err}>
         <AgentModelPanel data={agents.data} />
       </Panel>
-      <Panel title="Top Sessions" meta="by cost · click a row to open in Transcripts" loading={top.loading} err={top.err}>
-        <TopSessionsTable data={top.data} projects={projects} navigateToSession={navigateToSession} />
-      </Panel>
-    </>
-  );
-}
-
-// ── ProjectDashboard ───────────────────────────────────────────────────────
-function ProjectDashboard({ project, timeRange }) {
-  const urls = useMemo(() => ({
-    summary: buildUrl('/api/dashboard/project-summary', timeRange, { project }),
-    dist:    buildUrl('/api/dashboard/session-distribution', timeRange, { project }),
-    files:   buildUrl('/api/dashboard/file-hotspots', timeRange, { project }),
-    errors:  buildUrl('/api/dashboard/errors', timeRange, { project }),
-  }), [timeRange, project]);
-  const summary = usePanel(urls.summary);
-  const dist    = usePanel(urls.dist);
-  const files   = usePanel(urls.files);
-  const errors  = usePanel(urls.errors);
-
-  return (
-    <>
-      <Panel title="Summary" meta={timeRange === 'all' ? 'all time' : `last ${timeRange}`} loading={summary.loading} err={summary.err}>
-        <SummaryBar data={summary.data} />
-      </Panel>
       <Panel title="Session Distribution" meta="by turn count" loading={dist.loading} err={dist.err}>
         <SessionDistributionTable data={dist.data} />
       </Panel>
@@ -1270,28 +1251,18 @@ function ProjectDashboard({ project, timeRange }) {
       <Panel title="Errors" loading={errors.loading} err={errors.err}>
         <ErrorSummaryPanel data={errors.data} />
       </Panel>
+      <Panel title="Top Sessions" meta="by cost · click a row to open in Transcripts" loading={top.loading} err={top.err}>
+        <TopSessionsTable data={top.data} projects={projects} navigateToSession={navigateToSession} />
+      </Panel>
     </>
   );
 }
 
 // ── DashboardView ──────────────────────────────────────────────────────────
-function DashboardView({ selectedProject, timeRange, projects, navigateToSession, goHome }) {
-  const projDisplay = useMemo(() => {
-    const p = projects.find(x => x.key === selectedProject);
-    return p ? p.display : selectedProject;
-  }, [projects, selectedProject]);
-
+function DashboardView({ timeRange, projects, navigateToSession }) {
   return (
     <div className="dashboard">
-      {selectedProject && (
-        <div className="breadcrumb">
-          <a onClick={goHome}>All Projects</a> &rsaquo; {projDisplay}
-        </div>
-      )}
-      {selectedProject === ''
-        ? <GlobalDashboard timeRange={timeRange} projects={projects} navigateToSession={navigateToSession} />
-        : <ProjectDashboard project={selectedProject} timeRange={timeRange} />
-      }
+      <GlobalDashboard timeRange={timeRange} projects={projects} navigateToSession={navigateToSession} />
     </div>
   );
 }
@@ -1469,7 +1440,8 @@ function App() {
     const p = new URLSearchParams(window.location.search);
     if (activeTab !== 'dashboard') p.set('tab', activeTab); else p.delete('tab');
     if (timeRange !== '30d') p.set('range', timeRange); else p.delete('range');
-    if (selectedProject) p.set('project', selectedProject); else p.delete('project');
+    if (activeTab === 'transcripts' && selectedProject) p.set('project', selectedProject);
+    else if (activeTab !== 'transcripts') p.delete('project');
     // session/sort are managed by TranscriptView — leave them alone here
     const qs = p.toString();
     window.history.replaceState(null, '', qs ? '?' + qs : window.location.pathname);
@@ -1523,30 +1495,31 @@ function App() {
           </>
         )}
 
-        <span className="sep">·</span>
-
-        <label>Project</label>
-        <select
-          value={selectedProject}
-          onChange={e => setSelectedProject(e.target.value)}
-          style={{ minWidth: 200, maxWidth: 360 }}
-        >
-          <option value="">All Projects</option>
-          {projects.map(p => (
-            <option key={p.key} value={p.key}>{p.display} ({p.sessionCount})</option>
-          ))}
-        </select>
+        {activeTab === 'transcripts' && (
+          <>
+            <span className="sep">·</span>
+            <label>Project</label>
+            <select
+              value={selectedProject}
+              onChange={e => setSelectedProject(e.target.value)}
+              style={{ minWidth: 200, maxWidth: 360 }}
+            >
+              <option value="">All Projects</option>
+              {projects.map(p => (
+                <option key={p.key} value={p.key}>{p.display} ({p.sessionCount})</option>
+              ))}
+            </select>
+          </>
+        )}
 
         {err && <span className="err">{err}</span>}
       </div>
 
       {activeTab === 'dashboard'
         ? <DashboardView
-            selectedProject={selectedProject}
             timeRange={timeRange}
             projects={projects}
             navigateToSession={navigateToSession}
-            goHome={goHome}
           />
         : <TranscriptView
             selectedProject={selectedProject}

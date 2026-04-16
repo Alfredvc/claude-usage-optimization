@@ -796,7 +796,6 @@ fn build_timeline(conn: &Connection, file_path: &str, is_subagent: bool) -> Resu
 struct DashboardQ {
     from: Option<String>,
     to: Option<String>,
-    project: Option<String>,
 }
 
 fn time_bounds(q: &DashboardQ) -> (String, String) {
@@ -1264,70 +1263,10 @@ async fn api_dashboard_top_sessions(
     }
 }
 
-async fn api_dashboard_project_summary(
-    State(state): State<AppState>,
-    Query(q): Query<DashboardQ>,
-) -> Response {
-    let project = q.project.clone().unwrap_or_default();
-    if project.is_empty() {
-        return (StatusCode::BAD_REQUEST, "project required").into_response();
-    }
-    let (from, to) = time_bounds(&q);
-    let db_path = state.db_path.clone();
-    let result = spawn_blocking(move || -> Result<Value, String> {
-        let conn = open_db(&db_path)?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT \
-                   ROUND(COALESCE(SUM(d.cost_usd), 0.0), 4) AS cost_usd, \
-                   COUNT(DISTINCT CASE WHEN NOT t.is_subagent THEN t.session_id END) AS session_count, \
-                   COUNT(DISTINCT CASE WHEN t.is_subagent THEN t.session_id END) AS subagent_count, \
-                   COUNT(d.entry_id) AS api_call_count \
-                 FROM entries e \
-                 JOIN transcripts t ON t.file_path = e.file_path \
-                 JOIN assistant_entries_deduped d ON d.entry_id = e.entry_id AND d.message_id IS NOT NULL \
-                 WHERE regexp_extract(e.file_path, '.*/projects/([^/]+)/[^/]+\\.jsonl$', 1) = ? \
-                   AND CAST(e.timestamp AS TIMESTAMP) >= CAST(? AS TIMESTAMP) \
-                   AND CAST(e.timestamp AS TIMESTAMP) < CAST(? AS TIMESTAMP)",
-            )
-            .map_err(|e| e.to_string())?;
-        let (cost_usd, session_count, subagent_count, api_call_count) = stmt
-            .query_row([&project, &from, &to], |row| {
-                Ok((
-                    row.get::<_, f64>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, i64>(2)?,
-                    row.get::<_, i64>(3)?,
-                ))
-            })
-            .map_err(|e| e.to_string())?;
-        let denom = session_count.max(1) as f64;
-        let avg = (cost_usd / denom * 1_000_000.0).round() / 1_000_000.0;
-        Ok(json!({
-            "cost_usd":              cost_usd,
-            "session_count":         session_count,
-            "subagent_count":        subagent_count,
-            "api_call_count":        api_call_count,
-            "avg_cost_per_session":  avg,
-        }))
-    })
-    .await;
-
-    match result {
-        Ok(Ok(v)) => Json(v).into_response(),
-        Ok(Err(e)) => err500(e),
-        Err(e) => err500(e),
-    }
-}
-
 async fn api_dashboard_session_distribution(
     State(state): State<AppState>,
     Query(q): Query<DashboardQ>,
 ) -> Response {
-    let project = q.project.clone().unwrap_or_default();
-    if project.is_empty() {
-        return (StatusCode::BAD_REQUEST, "project required").into_response();
-    }
     let (from, to) = time_bounds(&q);
     let db_path = state.db_path.clone();
     let result = spawn_blocking(move || -> Result<Value, String> {
@@ -1356,7 +1295,6 @@ async fn api_dashboard_session_distribution(
                    JOIN entries e ON e.file_path = t.file_path \
                    JOIN assistant_entries_deduped d ON d.entry_id = e.entry_id AND d.message_id IS NOT NULL \
                    WHERE NOT t.is_subagent \
-                     AND regexp_extract(t.file_path, '.*/projects/([^/]+)/[^/]+\\.jsonl$', 1) = ? \
                      AND CAST(t.first_timestamp AS TIMESTAMP) >= CAST(? AS TIMESTAMP) \
                      AND CAST(t.first_timestamp AS TIMESTAMP) < CAST(? AS TIMESTAMP) \
                    GROUP BY t.session_id \
@@ -1372,7 +1310,7 @@ async fn api_dashboard_session_distribution(
             )
             .map_err(|e| e.to_string())?;
         let rows = stmt
-            .query_map([&project, &from, &to], |row| {
+            .query_map([&from, &to], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, i64>(1)?,
@@ -1408,10 +1346,6 @@ async fn api_dashboard_file_hotspots(
     State(state): State<AppState>,
     Query(q): Query<DashboardQ>,
 ) -> Response {
-    let project = q.project.clone().unwrap_or_default();
-    if project.is_empty() {
-        return (StatusCode::BAD_REQUEST, "project required").into_response();
-    }
     let (from, to) = time_bounds(&q);
     let db_path = state.db_path.clone();
     let result = spawn_blocking(move || -> Result<Value, String> {
@@ -1427,7 +1361,6 @@ async fn api_dashboard_file_hotspots(
                  JOIN transcripts t ON t.file_path = e.file_path \
                  WHERE acb.block_type = 'tool_use' AND acb.tool_name = 'Read' \
                    AND NOT t.is_subagent \
-                   AND regexp_extract(t.file_path, '.*/projects/([^/]+)/[^/]+\\.jsonl$', 1) = ? \
                    AND CAST(e.timestamp AS TIMESTAMP) >= CAST(? AS TIMESTAMP) \
                    AND CAST(e.timestamp AS TIMESTAMP) < CAST(? AS TIMESTAMP) \
                    AND json_extract_string(acb.tool_input, '$.file_path') IS NOT NULL \
@@ -1438,7 +1371,7 @@ async fn api_dashboard_file_hotspots(
             )
             .map_err(|e| e.to_string())?;
         let rows = stmt
-            .query_map([&project, &from, &to], |row| {
+            .query_map([&from, &to], |row| {
                 Ok((
                     row.get::<_, Option<String>>(0)?,
                     row.get::<_, i64>(1)?,
@@ -1470,10 +1403,6 @@ async fn api_dashboard_errors(
     State(state): State<AppState>,
     Query(q): Query<DashboardQ>,
 ) -> Response {
-    let project = q.project.clone().unwrap_or_default();
-    if project.is_empty() {
-        return (StatusCode::BAD_REQUEST, "project required").into_response();
-    }
     let (from, to) = time_bounds(&q);
     let db_path = state.db_path.clone();
     let result = spawn_blocking(move || -> Result<Value, String> {
@@ -1502,7 +1431,6 @@ async fn api_dashboard_errors(
                  JOIN transcripts t ON t.file_path = e.file_path \
                  WHERE ucb.is_error = true \
                    AND NOT t.is_subagent \
-                   AND regexp_extract(t.file_path, '.*/projects/([^/]+)/[^/]+\\.jsonl$', 1) = ? \
                    AND CAST(e.timestamp AS TIMESTAMP) >= CAST(? AS TIMESTAMP) \
                    AND CAST(e.timestamp AS TIMESTAMP) < CAST(? AS TIMESTAMP) \
                  GROUP BY error_type \
@@ -1510,7 +1438,7 @@ async fn api_dashboard_errors(
             )
             .map_err(|e| e.to_string())?;
         let rows_a = stmt_a
-            .query_map([&project, &from, &to], |row| {
+            .query_map([&from, &to], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, i64>(1)?,
@@ -1539,14 +1467,13 @@ async fn api_dashboard_errors(
                  JOIN entries e ON e.file_path = t.file_path \
                  JOIN assistant_entries_deduped d ON d.entry_id = e.entry_id AND d.message_id IS NOT NULL \
                  WHERE NOT t.is_subagent \
-                   AND regexp_extract(t.file_path, '.*/projects/([^/]+)/[^/]+\\.jsonl$', 1) = ? \
                    AND CAST(t.first_timestamp AS TIMESTAMP) >= CAST(? AS TIMESTAMP) \
                    AND CAST(t.first_timestamp AS TIMESTAMP) < CAST(? AS TIMESTAMP) \
                  GROUP BY t.session_id",
             )
             .map_err(|e| e.to_string())?;
         let rows_b1 = stmt_b1
-            .query_map([&project, &from, &to], |row| {
+            .query_map([&from, &to], |row| {
                 Ok((
                     row.get::<_, Option<String>>(0)?,
                     row.get::<_, f64>(1)?,
@@ -1573,14 +1500,13 @@ async fn api_dashboard_errors(
                  JOIN user_content_blocks ucb ON ucb.entry_id = e.entry_id \
                  WHERE ucb.is_error = true \
                    AND NOT t.is_subagent \
-                   AND regexp_extract(t.file_path, '.*/projects/([^/]+)/[^/]+\\.jsonl$', 1) = ? \
                    AND CAST(t.first_timestamp AS TIMESTAMP) >= CAST(? AS TIMESTAMP) \
                    AND CAST(t.first_timestamp AS TIMESTAMP) < CAST(? AS TIMESTAMP) \
                  GROUP BY t.session_id",
             )
             .map_err(|e| e.to_string())?;
         let rows_b2 = stmt_b2
-            .query_map([&project, &from, &to], |row| {
+            .query_map([&from, &to], |row| {
                 Ok((row.get::<_, Option<String>>(0)?, row.get::<_, i64>(1)?))
             })
             .map_err(|e| e.to_string())?;
@@ -1673,10 +1599,6 @@ pub async fn run(args: ServeArgs) {
         .route(
             "/api/dashboard/top-sessions",
             get(api_dashboard_top_sessions),
-        )
-        .route(
-            "/api/dashboard/project-summary",
-            get(api_dashboard_project_summary),
         )
         .route(
             "/api/dashboard/session-distribution",
