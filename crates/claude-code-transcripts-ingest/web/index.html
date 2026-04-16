@@ -270,6 +270,22 @@
     .panel-loading { color: var(--muted); font-size: 12px; text-align: center; padding: 20px; }
     .panel-error { color: #f85149; font-size: 12px; padding: 8px; }
 
+    /* ── Baseline bar ── */
+    .baseline-bar {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 10px 16px;
+      background: var(--surface, #f5f5f5);
+      border: 1px solid var(--border, #e0e0e0);
+      border-radius: 6px;
+      margin-bottom: 16px;
+      font-size: 0.9em;
+      flex-wrap: wrap;
+    }
+    .baseline-bar .dot { color: var(--muted, #888); }
+    .baseline-bar .muted { color: var(--muted, #888); }
+
     /* ── Breadcrumb ── */
     .breadcrumb { font-size: 12px; color: var(--muted); }
     .breadcrumb a { color: var(--accent); cursor: pointer; text-decoration: none; }
@@ -1202,9 +1218,25 @@ function ErrorSummaryPanel({ data }) {
   );
 }
 
+// ── BaselineBar ────────────────────────────────────────────────────────────
+function BaselineBar({ url }) {
+  const { data, loading, err } = usePanel(url);
+  if (loading) return <div className="baseline-bar muted">Loading baseline…</div>;
+  if (err || !data) return null;
+  const { typical_week_usd, weeks_observed, selected_usd, selected_as_weeks } = data;
+  return (
+    <div className="baseline-bar">
+      <span><strong>Typical week:</strong> ${typical_week_usd.toFixed(2)} <span className="muted">(avg of last {weeks_observed} weeks)</span></span>
+      <span className="dot">·</span>
+      <span><strong>Selected range:</strong> ${selected_usd.toFixed(2)} <span className="muted">= {selected_as_weeks.toFixed(1)}× typical week</span></span>
+    </div>
+  );
+}
+
 // ── GlobalDashboard ────────────────────────────────────────────────────────
 function GlobalDashboard({ timeRange, projects, navigateToSession }) {
   const urls = useMemo(() => ({
+    baseline: buildUrl('/api/dashboard/baseline', timeRange),
     summary: buildUrl('/api/dashboard/summary', timeRange),
     daily:   buildUrl('/api/dashboard/daily', timeRange),
     models:  buildUrl('/api/dashboard/models', timeRange),
@@ -1227,6 +1259,7 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
 
   return (
     <>
+      <BaselineBar url={urls.baseline} />
       <Panel title="Summary" meta={timeRange === 'all' ? 'all time' : `last ${timeRange}`} loading={summary.loading} err={summary.err}>
         <SummaryBar data={summary.data} />
       </Panel>

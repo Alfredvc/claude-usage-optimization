@@ -1575,6 +1575,84 @@ async fn api_dashboard_errors(
     }
 }
 
+async fn api_dashboard_baseline(
+    State(state): State<AppState>,
+    Query(q): Query<DashboardQ>,
+) -> Response {
+    let (from, to) = time_bounds(&q);
+    let db_path = state.db_path.clone();
+    let result = spawn_blocking(move || -> Result<Value, String> {
+        let conn = open_db(&db_path)?;
+
+        // trailing 4-week avg weekly spend
+        let typical: (Option<String>, f64, i64) = conn
+            .query_row(
+                "WITH bounds AS (
+                   SELECT date_trunc('day', MAX(last_timestamp)) AS anchor FROM transcripts
+                 ),
+                 weekly AS (
+                   SELECT date_trunc('week', e.timestamp) AS week_start,
+                          SUM(d.cost_usd) AS cost_usd
+                   FROM entries e
+                   JOIN assistant_entries_deduped d
+                     ON d.entry_id = e.entry_id AND d.message_id IS NOT NULL
+                   WHERE e.timestamp >= (SELECT anchor - INTERVAL 28 DAY FROM bounds)
+                     AND e.timestamp <  (SELECT anchor FROM bounds)
+                   GROUP BY 1
+                 )
+                 SELECT (SELECT anchor::VARCHAR FROM bounds),
+                        COALESCE(AVG(cost_usd), 0.0),
+                        COUNT(*)
+                 FROM weekly",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, f64>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .map_err(|e| e.to_string())?;
+
+        // selected-range total
+        let selected: f64 = conn
+            .query_row(
+                "SELECT ROUND(COALESCE(SUM(d.cost_usd), 0.0), 4)
+                 FROM entries e
+                 JOIN assistant_entries_deduped d
+                   ON d.entry_id = e.entry_id AND d.message_id IS NOT NULL
+                 WHERE CAST(e.timestamp AS TIMESTAMP) >= CAST(? AS TIMESTAMP)
+                   AND CAST(e.timestamp AS TIMESTAMP) <  CAST(? AS TIMESTAMP)",
+                [&from, &to],
+                |row| row.get::<_, f64>(0),
+            )
+            .map_err(|e| e.to_string())?;
+
+        let typical_week_usd = typical.1;
+        let weeks_observed = typical.2;
+        let ratio = if typical_week_usd > 0.0 {
+            selected / typical_week_usd
+        } else {
+            0.0
+        };
+
+        Ok(json!({
+            "anchor":            typical.0,
+            "typical_week_usd":  typical_week_usd,
+            "weeks_observed":    weeks_observed,
+            "selected_usd":      selected,
+            "selected_as_weeks": ratio,
+        }))
+    })
+    .await;
+    match result {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => err500(e),
+        Err(e) => err500(e),
+    }
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 pub async fn run(args: ServeArgs) {
@@ -1609,6 +1687,7 @@ pub async fn run(args: ServeArgs) {
             get(api_dashboard_file_hotspots),
         )
         .route("/api/dashboard/errors", get(api_dashboard_errors))
+        .route("/api/dashboard/baseline", get(api_dashboard_baseline))
         .with_state(state);
 
     let addr = format!("127.0.0.1:{port}");
