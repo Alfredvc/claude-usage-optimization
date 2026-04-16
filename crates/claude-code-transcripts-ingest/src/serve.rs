@@ -491,6 +491,59 @@ fn build_timeline(conn: &Connection, file_path: &str, is_subagent: bool) -> Resu
         }
     }
 
+    // ── compact boundary data ─────────────────────────────────────────────────
+    struct CompactData {
+        subtype: String,
+        trigger: Option<String>,
+        pre_tokens: Option<i64>,
+        post_tokens: Option<i64>,
+        duration_ms: Option<i64>,
+        pre_discovered_tools: Option<Value>,
+    }
+    let mut compact_data: HashMap<i64, CompactData> = HashMap::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT se.entry_id, se.subtype, se.compact_trigger, \
+                        se.compact_pre_tokens, se.compact_post_tokens, se.compact_duration_ms, \
+                        se.compact_pre_discovered_tools \
+                 FROM system_entries se \
+                 JOIN entries e ON e.entry_id = se.entry_id \
+                 WHERE e.file_path = ? \
+                   AND se.subtype IN ('compact_boundary', 'microcompact_boundary')",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([file_path], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<i64>>(3)?,
+                    row.get::<_, Option<i64>>(4)?,
+                    row.get::<_, Option<i64>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        for r in rows.filter_map(|r| r.ok()) {
+            let (eid, subtype, trigger, pre_tokens, post_tokens, duration_ms, tools_json) = r;
+            let pre_discovered_tools =
+                tools_json.and_then(|s| serde_json::from_str::<Value>(&s).ok());
+            compact_data.insert(
+                eid,
+                CompactData {
+                    subtype,
+                    trigger,
+                    pre_tokens,
+                    post_tokens,
+                    duration_ms,
+                    pre_discovered_tools,
+                },
+            );
+        }
+    }
+
     // ── subagent costs: agent_id → cost_usd (parent sessions only) ──────────
     let mut subagent_costs: HashMap<String, f64> = HashMap::new();
     if !is_subagent {
@@ -783,6 +836,27 @@ fn build_timeline(conn: &Connection, file_path: &str, is_subagent: bool) -> Resu
                     "texts":                       texts,
                     "tool_uses":                   tool_uses,
                 }));
+            }
+            "system" => {
+                if let Some(cd) = compact_data.get(&e.entry_id) {
+                    let reduction = match (cd.pre_tokens, cd.post_tokens) {
+                        (Some(pre), Some(post)) if pre > 0 => {
+                            Some(((pre - post) as f64 / pre as f64 * 100.0).round() as i64)
+                        }
+                        _ => None,
+                    };
+                    out.push(json!({
+                        "kind":                  "compact",
+                        "subtype":               cd.subtype,
+                        "timestamp":             e.timestamp,
+                        "trigger":               cd.trigger,
+                        "pre_tokens":            cd.pre_tokens,
+                        "post_tokens":           cd.post_tokens,
+                        "duration_ms":           cd.duration_ms,
+                        "reduction_pct":         reduction,
+                        "pre_discovered_tools":  cd.pre_discovered_tools,
+                    }));
+                }
             }
             _ => {}
         }
