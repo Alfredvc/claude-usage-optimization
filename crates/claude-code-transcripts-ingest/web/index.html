@@ -1291,31 +1291,100 @@ function TokenStreamsPanel({ data }) {
   );
 }
 
+// ── ArtifactLeaderboard ────────────────────────────────────────────────────
+function ArtifactLeaderboard({ data, kind, navigateToSession }) {
+  if (!data || !data.rows || data.rows.length === 0)
+    return <div className="muted">No data</div>;
+
+  const { rows } = data;
+  const fmtSize = n => n == null ? '—' : n >= 1000 ? `${(n/1000).toFixed(1)}k` : String(n);
+
+  if (kind === 'write') return (
+    <table className="data-table">
+      <thead><tr><th>File</th><th>Size</th><th>Session</th><th>Time</th></tr></thead>
+      <tbody>{rows.map((r, i) => (
+        <tr key={i} style={{ cursor: 'pointer' }}
+            onClick={() => navigateToSession(r.project, r.session_id)}>
+          <td style={{ maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+              title={r.file_path}>{r.file_path || '—'}</td>
+          <td className="num">{fmtSize(r.size_chars)} chars</td>
+          <td style={{ fontFamily: 'monospace', fontSize: '0.85em' }}>{(r.session_id || '').slice(0,8)}</td>
+          <td style={{ whiteSpace: 'nowrap', fontSize: '0.85em' }}>{(r.ts || '').slice(0,16)}</td>
+        </tr>
+      ))}</tbody>
+    </table>
+  );
+
+  if (kind === 'agent') return (
+    <table className="data-table">
+      <thead><tr><th>Type</th><th>Description</th><th>Prompt size</th><th>Session</th><th>Time</th></tr></thead>
+      <tbody>{rows.map((r, i) => (
+        <tr key={i} style={{ cursor: 'pointer' }}
+            onClick={() => navigateToSession(r.project, r.session_id)}>
+          <td>{r.subagent_type || '—'}</td>
+          <td style={{ maxWidth: 250, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+              title={r.description}>{r.description || '—'}</td>
+          <td className="num">{fmtSize(r.size_chars)} chars</td>
+          <td style={{ fontFamily: 'monospace', fontSize: '0.85em' }}>{(r.session_id || '').slice(0,8)}</td>
+          <td style={{ whiteSpace: 'nowrap', fontSize: '0.85em' }}>{(r.ts || '').slice(0,16)}</td>
+        </tr>
+      ))}</tbody>
+    </table>
+  );
+
+  // tool_result
+  return (
+    <table className="data-table">
+      <thead><tr><th>Tool</th><th>Label</th><th>Size</th><th>Session</th><th>Time</th></tr></thead>
+      <tbody>{rows.map((r, i) => {
+        const label = r.label_file || r.label_cmd || r.label_url || r.label_pat || '—';
+        return (
+          <tr key={i} style={{ cursor: 'pointer' }}
+              onClick={() => navigateToSession(r.project, r.session_id)}>
+            <td>{r.tool_name || '—'}</td>
+            <td style={{ maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                title={label}>{label}</td>
+            <td className="num">{fmtSize(r.size_chars)} chars</td>
+            <td style={{ fontFamily: 'monospace', fontSize: '0.85em' }}>{(r.session_id || '').slice(0,8)}</td>
+            <td style={{ whiteSpace: 'nowrap', fontSize: '0.85em' }}>{(r.ts || '').slice(0,16)}</td>
+          </tr>
+        );
+      })}</tbody>
+    </table>
+  );
+}
+
 // ── GlobalDashboard ────────────────────────────────────────────────────────
 function GlobalDashboard({ timeRange, projects, navigateToSession }) {
   const urls = useMemo(() => ({
-    baseline:     buildUrl('/api/dashboard/baseline', timeRange),
-    summary:      buildUrl('/api/dashboard/summary', timeRange),
-    daily:        buildUrl('/api/dashboard/daily', timeRange),
-    models:       buildUrl('/api/dashboard/models', timeRange),
-    cache:        buildUrl('/api/dashboard/cache', timeRange),
-    agents:       buildUrl('/api/dashboard/agents', timeRange),
-    top:          buildUrl('/api/dashboard/top-sessions', timeRange),
-    dist:         buildUrl('/api/dashboard/session-distribution', timeRange),
-    files:        buildUrl('/api/dashboard/file-hotspots', timeRange),
-    errors:       buildUrl('/api/dashboard/errors', timeRange),
-    tokenStreams: buildUrl('/api/dashboard/token-streams', timeRange),
+    baseline:            buildUrl('/api/dashboard/baseline', timeRange),
+    summary:             buildUrl('/api/dashboard/summary', timeRange),
+    daily:               buildUrl('/api/dashboard/daily', timeRange),
+    models:              buildUrl('/api/dashboard/models', timeRange),
+    cache:               buildUrl('/api/dashboard/cache', timeRange),
+    agents:              buildUrl('/api/dashboard/agents', timeRange),
+    top:                 buildUrl('/api/dashboard/top-sessions', timeRange),
+    dist:                buildUrl('/api/dashboard/session-distribution', timeRange),
+    files:               buildUrl('/api/dashboard/file-hotspots', timeRange),
+    errors:              buildUrl('/api/dashboard/errors', timeRange),
+    tokenStreams:        buildUrl('/api/dashboard/token-streams', timeRange),
+    artifactWrites:      buildUrl('/api/dashboard/artifacts', timeRange, { kind: 'write' }),
+    artifactAgents:      buildUrl('/api/dashboard/artifacts', timeRange, { kind: 'agent' }),
+    artifactToolResults: buildUrl('/api/dashboard/artifacts', timeRange, { kind: 'tool_result' }),
   }), [timeRange]);
-  const summary      = usePanel(urls.summary);
-  const daily        = usePanel(urls.daily);
-  const models       = usePanel(urls.models);
-  const cache        = usePanel(urls.cache);
-  const agents       = usePanel(urls.agents);
-  const top          = usePanel(urls.top);
-  const dist         = usePanel(urls.dist);
-  const files        = usePanel(urls.files);
-  const errors       = usePanel(urls.errors);
-  const tokenStreams  = usePanel(urls.tokenStreams);
+  const summary            = usePanel(urls.summary);
+  const daily              = usePanel(urls.daily);
+  const models             = usePanel(urls.models);
+  const cache              = usePanel(urls.cache);
+  const agents             = usePanel(urls.agents);
+  const top                = usePanel(urls.top);
+  const dist               = usePanel(urls.dist);
+  const files              = usePanel(urls.files);
+  const errors             = usePanel(urls.errors);
+  const tokenStreams        = usePanel(urls.tokenStreams);
+  const artifactWrites      = usePanel(urls.artifactWrites);
+  const artifactAgents      = usePanel(urls.artifactAgents);
+  const artifactToolResults = usePanel(urls.artifactToolResults);
 
   return (
     <>
@@ -1349,6 +1418,15 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
       </Panel>
       <Panel title="Top Sessions" meta="by cost · click a row to open in Transcripts" loading={top.loading} err={top.err}>
         <TopSessionsTable data={top.data} projects={projects} navigateToSession={navigateToSession} />
+      </Panel>
+      <Panel title="Artifact Leaderboard: Large Writes" meta="top 30 by content size" loading={artifactWrites.loading} err={artifactWrites.err}>
+        <ArtifactLeaderboard data={artifactWrites.data} kind="write" navigateToSession={navigateToSession} />
+      </Panel>
+      <Panel title="Artifact Leaderboard: Agent Prompts" meta="top 30 by prompt size" loading={artifactAgents.loading} err={artifactAgents.err}>
+        <ArtifactLeaderboard data={artifactAgents.data} kind="agent" navigateToSession={navigateToSession} />
+      </Panel>
+      <Panel title="Artifact Leaderboard: Tool Results" meta="top 30 by result size" loading={artifactToolResults.loading} err={artifactToolResults.err}>
+        <ArtifactLeaderboard data={artifactToolResults.data} kind="tool_result" navigateToSession={navigateToSession} />
       </Panel>
     </>
   );

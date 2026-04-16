@@ -1757,6 +1757,144 @@ GROUP BY is_sidechain";
     }
 }
 
+// ── Artifact leaderboard ─────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct ArtifactQ {
+    from: Option<String>,
+    to: Option<String>,
+    kind: String,
+    tool: Option<String>,
+    limit: Option<i64>,
+}
+
+async fn api_dashboard_artifacts(
+    State(state): State<AppState>,
+    Query(q): Query<ArtifactQ>,
+) -> Response {
+    let from = q.from.clone().unwrap_or_else(|| "1900-01-01".into());
+    let to = q.to.clone().unwrap_or_else(|| "2100-01-01".into());
+    let limit = q.limit.unwrap_or(30).clamp(1, 200);
+    let kind = q.kind.clone();
+    let tool = q.tool.clone();
+    let db_path = state.db_path.clone();
+
+    let result = spawn_blocking(move || -> Result<Value, String> {
+        let conn = open_db(&db_path)?;
+        let rows: Vec<Value> = match kind.as_str() {
+            "write" => {
+                let sql = format!(
+                    "SELECT e.session_id,
+                            regexp_extract(e.file_path, '.*/projects/([^/]+)/[^/]+\\.jsonl$', 1) AS project,
+                            json_extract_string(acb.tool_input, '$.file_path') AS file_path,
+                            LENGTH(json_extract_string(acb.tool_input, '$.content')) AS size_chars,
+                            e.timestamp::VARCHAR AS ts
+                     FROM assistant_content_blocks acb
+                     JOIN entries e ON e.entry_id = acb.entry_id
+                     WHERE acb.tool_name = 'Write'
+                       AND CAST(e.timestamp AS TIMESTAMP) >= CAST(? AS TIMESTAMP)
+                       AND CAST(e.timestamp AS TIMESTAMP) <  CAST(? AS TIMESTAMP)
+                     ORDER BY size_chars DESC NULLS LAST
+                     LIMIT {limit}"
+                );
+                let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+                stmt.query_map(
+                    [&from, &to],
+                    |row| Ok(json!({
+                        "session_id": row.get::<_, Option<String>>(0)?,
+                        "project":    row.get::<_, Option<String>>(1)?,
+                        "file_path":  row.get::<_, Option<String>>(2)?,
+                        "size_chars": row.get::<_, Option<i64>>(3)?,
+                        "ts":         row.get::<_, Option<String>>(4)?,
+                    }))
+                ).map_err(|e| e.to_string())?
+                .filter_map(|r| r.ok()).collect()
+            }
+            "agent" => {
+                let sql = format!(
+                    "SELECT e.session_id,
+                            regexp_extract(e.file_path, '.*/projects/([^/]+)/[^/]+\\.jsonl$', 1) AS project,
+                            COALESCE(json_extract_string(acb.tool_input, '$.subagent_type'), 'general-purpose') AS subagent_type,
+                            json_extract_string(acb.tool_input, '$.description') AS description,
+                            LENGTH(json_extract_string(acb.tool_input, '$.prompt')) AS size_chars,
+                            e.timestamp::VARCHAR AS ts
+                     FROM assistant_content_blocks acb
+                     JOIN entries e ON e.entry_id = acb.entry_id
+                     WHERE acb.tool_name = 'Agent'
+                       AND CAST(e.timestamp AS TIMESTAMP) >= CAST(? AS TIMESTAMP)
+                       AND CAST(e.timestamp AS TIMESTAMP) <  CAST(? AS TIMESTAMP)
+                     ORDER BY size_chars DESC NULLS LAST
+                     LIMIT {limit}"
+                );
+                let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+                stmt.query_map(
+                    [&from, &to],
+                    |row| Ok(json!({
+                        "session_id":    row.get::<_, Option<String>>(0)?,
+                        "project":       row.get::<_, Option<String>>(1)?,
+                        "subagent_type": row.get::<_, Option<String>>(2)?,
+                        "description":   row.get::<_, Option<String>>(3)?,
+                        "size_chars":    row.get::<_, Option<i64>>(4)?,
+                        "ts":            row.get::<_, Option<String>>(5)?,
+                    }))
+                ).map_err(|e| e.to_string())?
+                .filter_map(|r| r.ok()).collect()
+            }
+            "tool_result" => {
+                let has_tool = tool.as_deref().map(|t| !t.is_empty()).unwrap_or(false);
+                let tool_filter = if has_tool { "AND acb.tool_name = ?" } else { "" };
+                let sql = format!(
+                    "SELECT e.session_id,
+                            regexp_extract(e.file_path, '.*/projects/([^/]+)/[^/]+\\.jsonl$', 1) AS project,
+                            acb.tool_name,
+                            SUBSTR(json_extract_string(acb.tool_input, '$.file_path'), 1, 80) AS label_file,
+                            SUBSTR(json_extract_string(acb.tool_input, '$.command'),   1, 80) AS label_cmd,
+                            SUBSTR(json_extract_string(acb.tool_input, '$.url'),       1, 80) AS label_url,
+                            SUBSTR(json_extract_string(acb.tool_input, '$.pattern'),   1, 80) AS label_pat,
+                            LENGTH(CAST(ucb.tool_result_content AS VARCHAR)) AS size_chars,
+                            e.timestamp::VARCHAR AS ts
+                     FROM assistant_content_blocks acb
+                     JOIN user_content_blocks ucb ON ucb.tool_use_id = acb.tool_use_id
+                     JOIN entries e ON e.entry_id = ucb.entry_id
+                     WHERE CAST(e.timestamp AS TIMESTAMP) >= CAST(? AS TIMESTAMP)
+                       AND CAST(e.timestamp AS TIMESTAMP) <  CAST(? AS TIMESTAMP)
+                       {tool_filter}
+                     ORDER BY size_chars DESC NULLS LAST
+                     LIMIT {limit}"
+                );
+                let mapper = |row: &duckdb::Row| Ok(json!({
+                    "session_id": row.get::<_, Option<String>>(0)?,
+                    "project":    row.get::<_, Option<String>>(1)?,
+                    "tool_name":  row.get::<_, Option<String>>(2)?,
+                    "label_file": row.get::<_, Option<String>>(3)?,
+                    "label_cmd":  row.get::<_, Option<String>>(4)?,
+                    "label_url":  row.get::<_, Option<String>>(5)?,
+                    "label_pat":  row.get::<_, Option<String>>(6)?,
+                    "size_chars": row.get::<_, Option<i64>>(7)?,
+                    "ts":         row.get::<_, Option<String>>(8)?,
+                }));
+                let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+                if has_tool {
+                    let t = tool.unwrap_or_default();
+                    stmt.query_map([from.as_str(), to.as_str(), t.as_str()], mapper)
+                } else {
+                    stmt.query_map([from.as_str(), to.as_str()], mapper)
+                }.map_err(|e| e.to_string())?
+                .filter_map(|r| r.ok()).collect()
+            }
+            _ => return Err(format!("unknown kind: {kind}")),
+        };
+
+        Ok(json!({ "kind": kind, "rows": rows }))
+    }).await;
+
+    match result {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => err500(e),
+        Err(e) => err500(e),
+    }
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 pub async fn run(args: ServeArgs) {
@@ -1796,6 +1934,7 @@ pub async fn run(args: ServeArgs) {
             "/api/dashboard/token-streams",
             get(api_dashboard_token_streams),
         )
+        .route("/api/dashboard/artifacts", get(api_dashboard_artifacts))
         .with_state(state);
 
     let addr = format!("127.0.0.1:{port}");
