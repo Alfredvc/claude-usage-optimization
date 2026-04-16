@@ -2381,6 +2381,61 @@ async fn api_dashboard_compactions(
     }
 }
 
+async fn api_dashboard_hour_of_day(
+    State(state): State<AppState>,
+    Query(q): Query<DashboardQ>,
+) -> Response {
+    let (from, to) = time_bounds(&q);
+    let db_path = state.db_path.clone();
+    let result = spawn_blocking(move || -> Result<Value, String> {
+        let conn = open_db(&db_path)?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT EXTRACT('hour' FROM e.timestamp)::INT AS h,
+                    ROUND(SUM(d.cost_usd), 2) AS cost_usd,
+                    COUNT(DISTINCT t.session_id) AS session_count
+             FROM entries e
+             JOIN transcripts t ON t.file_path = e.file_path
+             JOIN assistant_entries_deduped d
+               ON d.entry_id = e.entry_id AND d.message_id IS NOT NULL
+             WHERE CAST(e.timestamp AS TIMESTAMP) >= CAST(? AS TIMESTAMP)
+               AND CAST(e.timestamp AS TIMESTAMP) <  CAST(? AS TIMESTAMP)
+             GROUP BY 1 ORDER BY 1",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([&from, &to], |row| {
+                Ok((
+                    row.get::<_, i32>(0)?,
+                    row.get::<_, f64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        let mut by_hour = vec![(0.0_f64, 0_i64); 24];
+        for r in rows.filter_map(|r| r.ok()) {
+            let (h, cost, sessions) = r;
+            if (0..24).contains(&h) {
+                by_hour[h as usize] = (cost, sessions);
+            }
+        }
+        let out: Vec<Value> = (0..24)
+            .map(|h| {
+                json!({
+                    "hour": h, "cost_usd": by_hour[h].0, "session_count": by_hour[h].1,
+                })
+            })
+            .collect();
+        Ok(Value::Array(out))
+    })
+    .await;
+    match result {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => err500(e),
+        Err(e) => err500(e),
+    }
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 pub async fn run(args: ServeArgs) {
@@ -2436,6 +2491,7 @@ pub async fn run(args: ServeArgs) {
             get(api_dashboard_cache_invalidation),
         )
         .route("/api/dashboard/compactions", get(api_dashboard_compactions))
+        .route("/api/dashboard/hour-of-day", get(api_dashboard_hour_of_day))
         .with_state(state);
 
     let addr = format!("127.0.0.1:{port}");

@@ -1517,6 +1517,23 @@ function CacheInvalidationPanel({ data }) {
   );
 }
 
+// ── HourOfDayChart ─────────────────────────────────────────────────────────
+function HourOfDayChart({ data }) {
+  const rows = Array.isArray(data) ? data : [];
+  if (rows.length === 0) return <div className="muted">No data</div>;
+  const { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } = Recharts;
+  return (
+    <ResponsiveContainer width="100%" height={160}>
+      <BarChart data={rows} margin={{ top: 4, right: 20, bottom: 4, left: 0 }}>
+        <XAxis dataKey="hour" />
+        <YAxis tickFormatter={v => `$${v}`} />
+        <Tooltip formatter={v => [`$${v}`, 'cost']} labelFormatter={h => `Hour ${h}:00`} />
+        <Bar dataKey="cost_usd" fill="#6baed6" name="cost" />
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}
+
 // ── CompactionsPanel ───────────────────────────────────────────────────────
 function CompactionsPanel({ data }) {
   if (!data) return <div className="muted">No data</div>;
@@ -1565,6 +1582,7 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
     firstTurnCc:         buildUrl('/api/dashboard/first-turn-cc', timeRange),
     cacheInval:          buildUrl('/api/dashboard/cache-invalidation', timeRange),
     compactions:         buildUrl('/api/dashboard/compactions', timeRange),
+    hourOfDay:           buildUrl('/api/dashboard/hour-of-day', timeRange),
   }), [timeRange]);
   const summary            = usePanel(urls.summary);
   const daily              = usePanel(urls.daily);
@@ -1585,6 +1603,7 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
   const firstTurnCc         = usePanel(urls.firstTurnCc);
   const cacheInval          = usePanel(urls.cacheInval);
   const compactions         = usePanel(urls.compactions);
+  const hourOfDay           = usePanel(urls.hourOfDay);
 
   return (
     <>
@@ -1645,6 +1664,9 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
       </Panel>
       <Panel title="Compaction Events" loading={compactions.loading} err={compactions.err}>
         <CompactionsPanel data={compactions.data} />
+      </Panel>
+      <Panel title="Hour-of-Day Cost" loading={hourOfDay.loading} err={hourOfDay.err}>
+        <HourOfDayChart data={hourOfDay.data} />
       </Panel>
     </>
   );
