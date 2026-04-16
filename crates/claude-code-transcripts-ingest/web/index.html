@@ -1400,6 +1400,37 @@ function ContextSizePanel({ data, navigateToSession }) {
   );
 }
 
+// ── TopTurnsTable ─────────────────────────────────────────────────────────
+function TopTurnsTable({ data, navigateToSession }) {
+  const rows = data?.rows || [];
+  if (rows.length === 0) return <div className="muted">No data</div>;
+  const fmtK = n => n == null ? '—' : n >= 1000 ? `${(n/1000).toFixed(0)}k` : String(n);
+  return (
+    <table className="data-table">
+      <thead>
+        <tr>
+          <th>Model</th><th>$</th><th>Input</th><th>Output</th>
+          <th>CC</th><th>Cache-read</th><th>Tools</th><th>Session</th><th>Time</th>
+        </tr>
+      </thead>
+      <tbody>{rows.map((r, i) => (
+        <tr key={i} style={{ cursor: 'pointer' }}
+            onClick={() => navigateToSession(r.project, r.session_id)}>
+          <td style={{ fontSize: '0.8em', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.model || '—'}</td>
+          <td>${(r.cost_usd || 0).toFixed(4)}</td>
+          <td>{fmtK(r.input_tokens)}</td>
+          <td>{fmtK(r.output_tokens)}</td>
+          <td>{fmtK(r.cc_tokens)}</td>
+          <td>{fmtK(r.cache_read_tokens)}</td>
+          <td>{r.tool_use_count ?? '—'}</td>
+          <td style={{ fontFamily: 'monospace', fontSize: '0.85em' }}>{(r.session_id || '').slice(0,8)}</td>
+          <td style={{ whiteSpace: 'nowrap', fontSize: '0.85em' }}>{(r.ts || '').slice(0,16)}</td>
+        </tr>
+      ))}</tbody>
+    </table>
+  );
+}
+
 // ── GlobalDashboard ────────────────────────────────────────────────────────
 function GlobalDashboard({ timeRange, projects, navigateToSession }) {
   const urls = useMemo(() => ({
@@ -1418,6 +1449,7 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
     artifactAgents:      buildUrl('/api/dashboard/artifacts', timeRange, { kind: 'agent' }),
     artifactToolResults: buildUrl('/api/dashboard/artifacts', timeRange, { kind: 'tool_result' }),
     ctxSize:             buildUrl('/api/dashboard/context-size', timeRange),
+    topTurns:            buildUrl('/api/dashboard/top-turns', timeRange),
   }), [timeRange]);
   const summary            = usePanel(urls.summary);
   const daily              = usePanel(urls.daily);
@@ -1433,6 +1465,7 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
   const artifactAgents      = usePanel(urls.artifactAgents);
   const artifactToolResults = usePanel(urls.artifactToolResults);
   const ctxSize             = usePanel(urls.ctxSize);
+  const topTurns            = usePanel(urls.topTurns);
 
   return (
     <>
@@ -1478,6 +1511,9 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
       </Panel>
       <Panel title="Context Size Distribution" meta="peak tokens per session · click 200k+ rows to open transcript" loading={ctxSize.loading} err={ctxSize.err}>
         <ContextSizePanel data={ctxSize.data} navigateToSession={navigateToSession} />
+      </Panel>
+      <Panel title="Top 1% Most-Expensive Turns" meta="top 30 by cost · click to open session" loading={topTurns.loading} err={topTurns.err}>
+        <TopTurnsTable data={topTurns.data} navigateToSession={navigateToSession} />
       </Panel>
     </>
   );

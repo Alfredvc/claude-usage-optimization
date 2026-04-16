@@ -2016,6 +2016,81 @@ LIMIT 20";
     }
 }
 
+async fn api_dashboard_top_turns(
+    State(state): State<AppState>,
+    Query(q): Query<DashboardQ>,
+) -> Response {
+    let (from, to) = time_bounds(&q);
+    let db_path = state.db_path.clone();
+    let result = spawn_blocking(move || -> Result<Value, String> {
+        let conn = open_db(&db_path)?;
+        let mut stmt = conn
+            .prepare(
+                "WITH ranked AS (
+               SELECT
+                 d.entry_id,
+                 t.session_id,
+                 regexp_extract(t.file_path, '.*/projects/([^/]+)/[^/]+\\.jsonl$', 1) AS project,
+                 t.is_subagent,
+                 d.model,
+                 ROUND(d.cost_usd, 4) AS cost_usd,
+                 d.input_tokens,
+                 d.output_tokens,
+                 d.cache_read_input_tokens,
+                 COALESCE(d.cache_creation_5m,0) + COALESCE(d.cache_creation_1h,0)
+                   + CASE WHEN COALESCE(d.cache_creation_5m,0)+COALESCE(d.cache_creation_1h,0)=0
+                          THEN COALESCE(d.cache_creation_input_tokens,0) ELSE 0 END AS cc_tokens,
+                 d.tool_use_count,
+                 e.timestamp::VARCHAR AS ts,
+                 NTILE(100) OVER (ORDER BY d.cost_usd DESC) AS pct_bucket
+               FROM entries e
+               JOIN transcripts t ON t.file_path = e.file_path
+               JOIN assistant_entries_deduped d
+                 ON d.entry_id = e.entry_id AND d.message_id IS NOT NULL
+               WHERE CAST(e.timestamp AS TIMESTAMP) >= CAST(? AS TIMESTAMP)
+                 AND CAST(e.timestamp AS TIMESTAMP) <  CAST(? AS TIMESTAMP)
+             )
+             SELECT entry_id, session_id, project, is_subagent,
+                    model, cost_usd, input_tokens, output_tokens,
+                    cache_read_input_tokens, cc_tokens, tool_use_count, ts
+             FROM ranked
+             WHERE pct_bucket = 1
+             ORDER BY cost_usd DESC
+             LIMIT 30",
+            )
+            .map_err(|e| e.to_string())?;
+
+        let rows: Vec<Value> = stmt
+            .query_map([&from, &to], |row| {
+                Ok(json!({
+                    "entry_id":          row.get::<_, Option<i64>>(0)?,
+                    "session_id":        row.get::<_, Option<String>>(1)?,
+                    "project":           row.get::<_, Option<String>>(2)?,
+                    "is_subagent":       row.get::<_, Option<bool>>(3)?,
+                    "model":             row.get::<_, Option<String>>(4)?,
+                    "cost_usd":          row.get::<_, Option<f64>>(5)?,
+                    "input_tokens":      row.get::<_, Option<i64>>(6)?,
+                    "output_tokens":     row.get::<_, Option<i64>>(7)?,
+                    "cache_read_tokens": row.get::<_, Option<i64>>(8)?,
+                    "cc_tokens":         row.get::<_, Option<i64>>(9)?,
+                    "tool_use_count":    row.get::<_, Option<i32>>(10)?,
+                    "ts":                row.get::<_, Option<String>>(11)?,
+                }))
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(json!({ "rows": rows }))
+    })
+    .await;
+    match result {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => err500(e),
+        Err(e) => err500(e),
+    }
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 pub async fn run(args: ServeArgs) {
@@ -2060,6 +2135,7 @@ pub async fn run(args: ServeArgs) {
             "/api/dashboard/context-size",
             get(api_dashboard_context_size),
         )
+        .route("/api/dashboard/top-turns", get(api_dashboard_top_turns))
         .with_state(state);
 
     let addr = format!("127.0.0.1:{port}");
