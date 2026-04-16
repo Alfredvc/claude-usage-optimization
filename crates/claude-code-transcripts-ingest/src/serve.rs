@@ -2436,6 +2436,51 @@ async fn api_dashboard_hour_of_day(
     }
 }
 
+async fn api_dashboard_hooks(
+    State(state): State<AppState>,
+    Query(q): Query<DashboardQ>,
+) -> Response {
+    let (from, to) = time_bounds(&q);
+    let db_path = state.db_path.clone();
+    let result = spawn_blocking(move || -> Result<Value, String> {
+        let conn = open_db(&db_path)?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT shi.command,
+                    COUNT(*) AS invocations,
+                    ROUND(AVG(shi.duration_ms), 0) AS avg_duration_ms,
+                    ROUND(SUM(shi.duration_ms) / 1000.0, 1) AS total_seconds
+             FROM system_hook_infos shi
+             JOIN entries e ON e.entry_id = shi.entry_id
+             WHERE CAST(e.timestamp AS TIMESTAMP) >= CAST(? AS TIMESTAMP)
+               AND CAST(e.timestamp AS TIMESTAMP) <  CAST(? AS TIMESTAMP)
+             GROUP BY shi.command
+             ORDER BY invocations DESC
+             LIMIT 50",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows: Vec<Value> = stmt
+            .query_map([&from, &to], |row| {
+                Ok(json!({
+                    "command":         row.get::<_, Option<String>>(0)?,
+                    "invocations":     row.get::<_, i64>(1)?,
+                    "avg_duration_ms": row.get::<_, f64>(2)?,
+                    "total_seconds":   row.get::<_, f64>(3)?,
+                }))
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(json!({ "rows": rows }))
+    })
+    .await;
+    match result {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => err500(e),
+        Err(e) => err500(e),
+    }
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 pub async fn run(args: ServeArgs) {
@@ -2492,6 +2537,7 @@ pub async fn run(args: ServeArgs) {
         )
         .route("/api/dashboard/compactions", get(api_dashboard_compactions))
         .route("/api/dashboard/hour-of-day", get(api_dashboard_hour_of_day))
+        .route("/api/dashboard/hooks", get(api_dashboard_hooks))
         .with_state(state);
 
     let addr = format!("127.0.0.1:{port}");

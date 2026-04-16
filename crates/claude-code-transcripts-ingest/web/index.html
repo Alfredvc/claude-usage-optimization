@@ -1517,6 +1517,26 @@ function CacheInvalidationPanel({ data }) {
   );
 }
 
+// ── HooksPanel ─────────────────────────────────────────────────────────────
+function HooksPanel({ data }) {
+  const rows = data?.rows || [];
+  if (rows.length === 0) return <div className="muted">No hook data in range</div>;
+  return (
+    <table className="data-table">
+      <thead><tr><th>Command</th><th>Invocations</th><th>Avg ms</th><th>Total sec</th></tr></thead>
+      <tbody>{rows.map((r, i) => (
+        <tr key={i}>
+          <td style={{ fontFamily: 'monospace', fontSize: '0.85em', maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+              title={r.command}>{r.command || '—'}</td>
+          <td>{r.invocations}</td>
+          <td>{(r.avg_duration_ms||0).toFixed(0)}</td>
+          <td>{(r.total_seconds||0).toFixed(1)}</td>
+        </tr>
+      ))}</tbody>
+    </table>
+  );
+}
+
 // ── HourOfDayChart ─────────────────────────────────────────────────────────
 function HourOfDayChart({ data }) {
   const rows = Array.isArray(data) ? data : [];
@@ -1583,6 +1603,7 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
     cacheInval:          buildUrl('/api/dashboard/cache-invalidation', timeRange),
     compactions:         buildUrl('/api/dashboard/compactions', timeRange),
     hourOfDay:           buildUrl('/api/dashboard/hour-of-day', timeRange),
+    hooks:               buildUrl('/api/dashboard/hooks', timeRange),
   }), [timeRange]);
   const summary            = usePanel(urls.summary);
   const daily              = usePanel(urls.daily);
@@ -1604,6 +1625,7 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
   const cacheInval          = usePanel(urls.cacheInval);
   const compactions         = usePanel(urls.compactions);
   const hourOfDay           = usePanel(urls.hourOfDay);
+  const hooks               = usePanel(urls.hooks);
 
   return (
     <>
@@ -1667,6 +1689,9 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
       </Panel>
       <Panel title="Hour-of-Day Cost" loading={hourOfDay.loading} err={hourOfDay.err}>
         <HourOfDayChart data={hourOfDay.data} />
+      </Panel>
+      <Panel title="Hook Frequency & Duration" meta="hook output size not stored in DB" loading={hooks.loading} err={hooks.err}>
+        <HooksPanel data={hooks.data} />
       </Panel>
     </>
   );
