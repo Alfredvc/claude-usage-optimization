@@ -1537,6 +1537,35 @@ function HooksPanel({ data }) {
   );
 }
 
+// ── McpToolsPanel ──────────────────────────────────────────────────────────
+function McpToolsPanel({ data }) {
+  const rows = data?.rows || [];
+  if (rows.length === 0) return <div className="muted">No MCP tool calls in range</div>;
+  return (
+    <table className="data-table">
+      <thead><tr>
+        <th>Tool</th>
+        <th>Server</th>
+        <th className="num">Calls</th>
+        <th className="num">Avg chars</th>
+        <th className="num">Max chars</th>
+        <th className="num">Total Mchars</th>
+      </tr></thead>
+      <tbody>{rows.map((r, i) => (
+        <tr key={i}>
+          <td style={{ fontFamily: 'monospace', fontSize: '0.85em', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+              title={r.tool_name}>{r.tool_name || '—'}</td>
+          <td>{r.mcp_server || '—'}</td>
+          <td className="num">{fmtNum(r.calls || 0)}</td>
+          <td className="num">{fmtNum(r.avg_result_chars || 0)}</td>
+          <td className="num">{fmtNum(r.max_result_chars || 0)}</td>
+          <td className="num">{(r.total_mchars || 0).toFixed(2)}</td>
+        </tr>
+      ))}</tbody>
+    </table>
+  );
+}
+
 // ── HourOfDayChart ─────────────────────────────────────────────────────────
 function HourOfDayChart({ data }) {
   const rows = Array.isArray(data) ? data : [];
@@ -1604,6 +1633,7 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
     compactions:         buildUrl('/api/dashboard/compactions', timeRange),
     hourOfDay:           buildUrl('/api/dashboard/hour-of-day', timeRange),
     hooks:               buildUrl('/api/dashboard/hooks', timeRange),
+    mcpTools:            buildUrl('/api/dashboard/mcp-tools', timeRange),
   }), [timeRange]);
   const summary            = usePanel(urls.summary);
   const daily              = usePanel(urls.daily);
@@ -1626,6 +1656,7 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
   const compactions         = usePanel(urls.compactions);
   const hourOfDay           = usePanel(urls.hourOfDay);
   const hooks               = usePanel(urls.hooks);
+  const mcpTools            = usePanel(urls.mcpTools);
 
   return (
     <>
@@ -1692,6 +1723,9 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
       </Panel>
       <Panel title="Hook Frequency & Duration" meta="hook output size not stored in DB" loading={hooks.loading} err={hooks.err}>
         <HooksPanel data={hooks.data} />
+      </Panel>
+      <Panel title="MCP Tool Result Sizes" loading={mcpTools.loading} err={mcpTools.err}>
+        <McpToolsPanel data={mcpTools.data} />
       </Panel>
     </>
   );

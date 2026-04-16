@@ -2481,6 +2481,58 @@ async fn api_dashboard_hooks(
     }
 }
 
+async fn api_dashboard_mcp_tools(
+    State(state): State<AppState>,
+    Query(q): Query<DashboardQ>,
+) -> Response {
+    let (from, to) = time_bounds(&q);
+    let db_path = state.db_path.clone();
+    let result = spawn_blocking(move || -> Result<Value, String> {
+        let conn = open_db(&db_path)?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT \
+                   acb.tool_name, \
+                   regexp_extract(acb.tool_name, '^mcp__([^_]+)', 1) AS mcp_server, \
+                   COUNT(*) AS calls, \
+                   ROUND(AVG(LENGTH(CAST(ucb.tool_result_content AS VARCHAR))), 0) AS avg_result_chars, \
+                   ROUND(MAX(LENGTH(CAST(ucb.tool_result_content AS VARCHAR))), 0) AS max_result_chars, \
+                   ROUND(SUM(LENGTH(CAST(ucb.tool_result_content AS VARCHAR))) / 1e6, 2) AS total_mchars \
+                 FROM assistant_content_blocks acb \
+                 JOIN user_content_blocks ucb ON ucb.tool_use_id = acb.tool_use_id \
+                 JOIN entries e ON e.entry_id = ucb.entry_id \
+                 WHERE acb.tool_name LIKE 'mcp__%' \
+                   AND CAST(e.timestamp AS TIMESTAMP) >= CAST(? AS TIMESTAMP) \
+                   AND CAST(e.timestamp AS TIMESTAMP) <  CAST(? AS TIMESTAMP) \
+                 GROUP BY acb.tool_name, mcp_server \
+                 ORDER BY total_mchars DESC \
+                 LIMIT 50",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows: Vec<Value> = stmt
+            .query_map([&from, &to], |row| {
+                Ok(json!({
+                    "tool_name":       row.get::<_, Option<String>>(0)?,
+                    "mcp_server":      row.get::<_, Option<String>>(1)?,
+                    "calls":           row.get::<_, i64>(2)?,
+                    "avg_result_chars":row.get::<_, f64>(3)?,
+                    "max_result_chars":row.get::<_, i64>(4)?,
+                    "total_mchars":    row.get::<_, f64>(5)?,
+                }))
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(json!({ "rows": rows }))
+    })
+    .await;
+    match result {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => err500(e),
+        Err(e) => err500(e),
+    }
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 pub async fn run(args: ServeArgs) {
@@ -2538,6 +2590,7 @@ pub async fn run(args: ServeArgs) {
         .route("/api/dashboard/compactions", get(api_dashboard_compactions))
         .route("/api/dashboard/hour-of-day", get(api_dashboard_hour_of_day))
         .route("/api/dashboard/hooks", get(api_dashboard_hooks))
+        .route("/api/dashboard/mcp-tools", get(api_dashboard_mcp_tools))
         .with_state(state);
 
     let addr = format!("127.0.0.1:{port}");
