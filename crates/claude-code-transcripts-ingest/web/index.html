@@ -1309,17 +1309,11 @@ function BaselineBar({ url }) {
   const { data, loading, err } = usePanel(url);
   if (loading) return <div className="baseline-bar muted">Loading baseline…</div>;
   if (err || !data) return null;
-  const { weeks, mean_usd, median_usd, selected_usd, vs_mean, vs_median } = data;
+  const { mean_usd, median_usd, selected_usd, vs_mean, vs_median } = data;
   const fmtW = v => v >= 1000 ? `$${(v/1000).toFixed(1)}k` : `$${v.toFixed(0)}`;
-  const weekLabels = (weeks || []).map(w => {
-    const label = (w.week_start || '').slice(5, 10); // MM-DD
-    return `${label} ${fmtW(w.cost_usd)}`;
-  }).join(' · ');
   return (
     <div className="baseline-bar">
-      {weekLabels && <span className="muted" style={{ fontSize: '0.85em' }}>{weekLabels}</span>}
-      {weekLabels && <span className="dot">·</span>}
-      <span><strong>Median</strong> {fmtW(median_usd)} <span className="muted">/ Mean {fmtW(mean_usd)}</span></span>
+      <span><strong>Claude Code usage per week:</strong> <span className="muted">Median</span> {fmtW(median_usd)} <span className="muted">· Mean</span> {fmtW(mean_usd)}</span>
       <span className="dot">·</span>
       <span><strong>Selected:</strong> {fmtW(selected_usd)} <span className="muted">= {vs_median.toFixed(1)}× median, {vs_mean.toFixed(1)}× mean</span></span>
     </div>
