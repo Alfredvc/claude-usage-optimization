@@ -227,6 +227,8 @@ pub struct UserMessage {
 #[serde(rename_all = "lowercase")]
 pub enum UserRole {
     User,
+    #[serde(other)]
+    Unknown,
 }
 
 /// User content is either a plain string or an array of typed blocks.
@@ -235,6 +237,8 @@ pub enum UserRole {
 pub enum UserContent {
     Text(String),
     Blocks(Vec<UserContentBlock>),
+    /// Catch-all for content shapes not yet recognised (e.g. future object forms).
+    Other(Value),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -330,7 +334,8 @@ pub struct AssistantMessage {
     #[serde(rename = "type")]
     pub msg_type: String,
     pub role: AssistantRole,
-    pub model: String,
+    #[serde(default)]
+    pub model: Option<String>,
 
     /// null when no container; Some(None) = present as JSON null.
     #[serde(
@@ -373,6 +378,8 @@ pub struct AssistantMessage {
 #[serde(rename_all = "lowercase")]
 pub enum AssistantRole {
     Assistant,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -467,7 +474,9 @@ pub struct AssistantUsage {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerToolUse {
+    #[serde(default)]
     pub web_search_requests: u64,
+    #[serde(default)]
     pub web_fetch_requests: u64,
 }
 
@@ -1068,6 +1077,8 @@ pub struct ModeEntry {
 pub enum SessionMode {
     Coordinator,
     Normal,
+    #[serde(other)]
+    Unknown,
 }
 
 // worktreeSession is nullable (null = exited, object = active)
@@ -1292,5 +1303,67 @@ mod tests {
         let json = r#"{"type":"text","text":"hello"}"#;
         let v: AssistantContentBlock = serde_json::from_str(json).unwrap();
         assert!(matches!(v, AssistantContentBlock::Text { .. }));
+    }
+
+    // ── New robustness tests (RED phase) ─────────────────────────────────
+
+    /// UserContent is untagged; a JSON object (neither string nor array)
+    /// must not fail — should fall through to an Other/Value catch-all.
+    #[test]
+    fn user_content_unknown_shape_does_not_fail() {
+        let json = r#"{"type":"future_format","data":42}"#;
+        let v: UserContent = serde_json::from_str(json).unwrap();
+        assert!(matches!(v, UserContent::Other(_)));
+    }
+
+    /// ServerToolUse with a missing field (e.g. if Anthropic removes one)
+    /// must deserialize successfully with a default of 0.
+    #[test]
+    fn server_tool_use_missing_field_uses_default() {
+        let json = r#"{"web_search_requests":3}"#;
+        let v: ServerToolUse = serde_json::from_str(json).unwrap();
+        assert_eq!(v.web_search_requests, 3);
+        assert_eq!(v.web_fetch_requests, 0);
+    }
+
+    /// A new / unrecognised UserRole value must parse as Unknown.
+    #[test]
+    fn user_role_unknown_value_does_not_fail() {
+        let json = r#""operator""#;
+        let v: UserRole = serde_json::from_str(json).unwrap();
+        assert!(matches!(v, UserRole::Unknown));
+    }
+
+    /// A new / unrecognised AssistantRole value must parse as Unknown.
+    #[test]
+    fn assistant_role_unknown_value_does_not_fail() {
+        let json = r#""system_agent""#;
+        let v: AssistantRole = serde_json::from_str(json).unwrap();
+        assert!(matches!(v, AssistantRole::Unknown));
+    }
+
+    /// A new / unrecognised SessionMode value must parse as Unknown.
+    #[test]
+    fn session_mode_unknown_value_does_not_fail() {
+        let json = r#""background""#;
+        let v: SessionMode = serde_json::from_str(json).unwrap();
+        assert!(matches!(v, SessionMode::Unknown));
+    }
+
+    /// AssistantMessage without a "model" field (e.g. API error responses)
+    /// must not fail deserialization.
+    #[test]
+    fn assistant_message_missing_model_uses_default() {
+        let json = r#"{
+            "id": "msg_err1",
+            "type": "message",
+            "role": "assistant",
+            "content": [],
+            "stop_reason": "error",
+            "stop_sequence": null,
+            "usage": {"input_tokens": 0, "output_tokens": 0}
+        }"#;
+        let v: AssistantMessage = serde_json::from_str(json).unwrap();
+        assert!(v.model.is_none());
     }
 }

@@ -688,6 +688,7 @@ fn build_user(
         match &ue.message.content {
             UserContent::Text(t) => (Some(t.clone()), false, vec![]),
             UserContent::Blocks(bs) => (None, true, bs.clone()),
+            UserContent::Other(_) => (None, false, vec![]),
         };
 
     let row = vec![
@@ -823,9 +824,10 @@ fn build_assistant(
         None => (None, None),
     };
 
+    let model_str = m.model.as_deref().unwrap_or("");
     let cost = compute_cost(
         pricing,
-        &m.model,
+        model_str,
         usage.input_tokens,
         usage.output_tokens,
         cache_5m,
@@ -833,8 +835,8 @@ fn build_assistant(
         usage.cache_creation_input_tokens,
         usage.cache_read_input_tokens,
     );
-    if cost.is_none() && !unknown_models.contains(&m.model) {
-        unknown_models.push(m.model.clone());
+    if cost.is_none() && !model_str.is_empty() && !unknown_models.iter().any(|s| s == model_str) {
+        unknown_models.push(model_str.to_string());
     }
 
     let tool_use_count = m
@@ -847,7 +849,7 @@ fn build_assistant(
         Value::Null,                           // entry_id
         s_str(&m.id),                          // message_id
         s_str(&role),                          // role
-        s_str(&m.model),                       // model
+        s_str(model_str),                      // model
         opt_opt_json(&m.container),            // container
         s(m.stop_reason.clone()),              // stop_reason
         s(m.stop_sequence.clone()),            // stop_sequence
