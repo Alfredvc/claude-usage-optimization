@@ -1309,12 +1309,19 @@ function BaselineBar({ url }) {
   const { data, loading, err } = usePanel(url);
   if (loading) return <div className="baseline-bar muted">Loading baseline…</div>;
   if (err || !data) return null;
-  const { typical_week_usd, weeks_observed, selected_usd, selected_as_weeks } = data;
+  const { weeks, mean_usd, median_usd, selected_usd, vs_mean, vs_median } = data;
+  const fmtW = v => v >= 1000 ? `$${(v/1000).toFixed(1)}k` : `$${v.toFixed(0)}`;
+  const weekLabels = (weeks || []).map(w => {
+    const label = (w.week_start || '').slice(5, 10); // MM-DD
+    return `${label} ${fmtW(w.cost_usd)}`;
+  }).join(' · ');
   return (
     <div className="baseline-bar">
-      <span><strong>Typical week:</strong> ${typical_week_usd.toFixed(2)} <span className="muted">(avg of last {weeks_observed} weeks)</span></span>
+      {weekLabels && <span className="muted" style={{ fontSize: '0.85em' }}>{weekLabels}</span>}
+      {weekLabels && <span className="dot">·</span>}
+      <span><strong>Median</strong> {fmtW(median_usd)} <span className="muted">/ Mean {fmtW(mean_usd)}</span></span>
       <span className="dot">·</span>
-      <span><strong>Selected range:</strong> ${selected_usd.toFixed(2)} <span className="muted">= {selected_as_weeks.toFixed(1)}× typical week</span></span>
+      <span><strong>Selected:</strong> {fmtW(selected_usd)} <span className="muted">= {vs_median.toFixed(1)}× median, {vs_mean.toFixed(1)}× mean</span></span>
     </div>
   );
 }

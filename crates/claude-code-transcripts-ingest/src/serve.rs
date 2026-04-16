@@ -1623,36 +1623,64 @@ async fn api_dashboard_baseline(
     let result = spawn_blocking(move || -> Result<Value, String> {
         let conn = open_db(&db_path)?;
 
-        // trailing 4-week avg weekly spend
-        let typical: (Option<String>, f64, i64) = conn
-            .query_row(
+        // trailing 4-week weekly spend + mean + median
+        let mut stmt = conn
+            .prepare(
                 "WITH bounds AS (
-                   SELECT date_trunc('day', MAX(last_timestamp)) AS anchor FROM transcripts
-                 ),
-                 weekly AS (
-                   SELECT date_trunc('week', e.timestamp) AS week_start,
-                          SUM(d.cost_usd) AS cost_usd
-                   FROM entries e
-                   JOIN assistant_entries_deduped d
-                     ON d.entry_id = e.entry_id AND d.message_id IS NOT NULL
-                   WHERE e.timestamp >= (SELECT anchor - INTERVAL 28 DAY FROM bounds)
-                     AND e.timestamp <  (SELECT anchor FROM bounds)
-                   GROUP BY 1
-                 )
-                 SELECT (SELECT anchor::VARCHAR FROM bounds),
-                        COALESCE(AVG(cost_usd), 0.0),
-                        COUNT(*)
-                 FROM weekly",
-                [],
-                |row| {
-                    Ok((
-                        row.get::<_, Option<String>>(0)?,
-                        row.get::<_, f64>(1)?,
-                        row.get::<_, i64>(2)?,
-                    ))
-                },
+               SELECT date_trunc('day', MAX(last_timestamp)) AS anchor FROM transcripts
+             ),
+             weekly AS (
+               SELECT date_trunc('week', e.timestamp)::VARCHAR AS week_start,
+                      ROUND(SUM(d.cost_usd), 2) AS cost_usd
+               FROM entries e
+               JOIN assistant_entries_deduped d
+                 ON d.entry_id = e.entry_id AND d.message_id IS NOT NULL
+               WHERE e.timestamp >= (SELECT anchor - INTERVAL 28 DAY FROM bounds)
+                 AND e.timestamp <  (SELECT anchor FROM bounds)
+               GROUP BY 1
+             ),
+             stats AS (
+               SELECT ROUND(AVG(cost_usd), 2)                       AS mean_usd,
+                      ROUND(QUANTILE_CONT(cost_usd, 0.5), 2)         AS median_usd,
+                      COUNT(*)                                        AS week_count,
+                      (SELECT anchor::VARCHAR FROM bounds)            AS anchor
+               FROM weekly
+             )
+             SELECT w.week_start, w.cost_usd, s.mean_usd, s.median_usd, s.week_count, s.anchor
+             FROM weekly w, stats s
+             ORDER BY w.week_start",
             )
             .map_err(|e| e.to_string())?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,         // week_start
+                    row.get::<_, f64>(1)?,            // cost_usd
+                    row.get::<_, f64>(2)?,            // mean_usd
+                    row.get::<_, f64>(3)?,            // median_usd
+                    row.get::<_, i64>(4)?,            // week_count
+                    row.get::<_, Option<String>>(5)?, // anchor
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+
+        let mut weeks = Vec::new();
+        let mut mean_usd = 0.0_f64;
+        let mut median_usd = 0.0_f64;
+        let mut week_count = 0_i64;
+        let mut anchor = None::<String>;
+
+        for r in rows.filter_map(|r| r.ok()) {
+            let (ws, cost, mean, median, count, anch) = r;
+            weeks.push(json!({ "week_start": ws, "cost_usd": cost }));
+            mean_usd = mean;
+            median_usd = median;
+            week_count = count;
+            if anchor.is_none() {
+                anchor = anch;
+            }
+        }
 
         // selected-range total
         let selected: f64 = conn
@@ -1668,20 +1696,26 @@ async fn api_dashboard_baseline(
             )
             .map_err(|e| e.to_string())?;
 
-        let typical_week_usd = typical.1;
-        let weeks_observed = typical.2;
-        let ratio = if typical_week_usd > 0.0 {
-            selected / typical_week_usd
+        let vs_mean = if mean_usd > 0.0 {
+            selected / mean_usd
+        } else {
+            0.0
+        };
+        let vs_median = if median_usd > 0.0 {
+            selected / median_usd
         } else {
             0.0
         };
 
         Ok(json!({
-            "anchor":            typical.0,
-            "typical_week_usd":  typical_week_usd,
-            "weeks_observed":    weeks_observed,
-            "selected_usd":      selected,
-            "selected_as_weeks": ratio,
+            "anchor":         anchor,
+            "weeks":          weeks,
+            "week_count":     week_count,
+            "mean_usd":       mean_usd,
+            "median_usd":     median_usd,
+            "selected_usd":   selected,
+            "vs_mean":        vs_mean,
+            "vs_median":      vs_median,
         }))
     })
     .await;
