@@ -1174,11 +1174,50 @@ async fn api_dashboard_agents(
             }));
         }
 
+        // spawn model breakdown per subtype
+        let mut stmt4 = conn
+            .prepare(
+                "SELECT \
+                   COALESCE(json_extract_string(acb.tool_input, '$.subagent_type'), 'general-purpose') AS subtype, \
+                   COUNT(*) AS spawns, \
+                   COUNT(*) FILTER (WHERE json_extract_string(acb.tool_input, '$.model') IS NOT NULL) AS explicit, \
+                   COUNT(*) FILTER (WHERE json_extract_string(acb.tool_input, '$.model') IS NULL)     AS inherited \
+                 FROM assistant_content_blocks acb \
+                 JOIN entries e ON e.entry_id = acb.entry_id \
+                 WHERE acb.block_type = 'tool_use' AND acb.tool_name = 'Agent' \
+                   AND CAST(e.timestamp AS TIMESTAMP) >= CAST(? AS TIMESTAMP) \
+                   AND CAST(e.timestamp AS TIMESTAMP) <  CAST(? AS TIMESTAMP) \
+                 GROUP BY COALESCE(json_extract_string(acb.tool_input, '$.subagent_type'), 'general-purpose') \
+                 ORDER BY spawns DESC",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows4 = stmt4
+            .query_map([&from, &to], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        let mut spawn_model_breakdown = Vec::new();
+        for r in rows4.filter_map(|r| r.ok()) {
+            let (subtype, spawns, explicit, inherited) = r;
+            spawn_model_breakdown.push(json!({
+                "subtype":   subtype,
+                "spawns":    spawns,
+                "explicit":  explicit,
+                "inherited": inherited,
+            }));
+        }
+
         Ok(json!({
-            "explicit_calls":      explicit_calls,
-            "inherited_calls":     inherited_calls,
-            "inherited_cost_usd":  inherited_cost_usd,
-            "subtypes":            subtypes,
+            "explicit_calls":        explicit_calls,
+            "inherited_calls":       inherited_calls,
+            "inherited_cost_usd":    inherited_cost_usd,
+            "subtypes":              subtypes,
+            "spawn_model_breakdown": spawn_model_breakdown,
         }))
     })
     .await;

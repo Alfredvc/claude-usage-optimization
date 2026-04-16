@@ -1122,6 +1122,31 @@ function AgentModelPanel({ data }) {
           </table>
         </>
       )}
+      {(data.spawn_model_breakdown || []).length > 0 && (
+        <>
+          <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 12, marginBottom: 6 }}>By Subtype</div>
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Subtype</th>
+                <th className="num">Spawns</th>
+                <th className="num">Explicit model</th>
+                <th className="num">Inherited model</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(data.spawn_model_breakdown || []).map((s, i) => (
+                <tr key={i}>
+                  <td>{s.subtype || '(unknown)'}</td>
+                  <td className="num">{fmtNum(s.spawns)}</td>
+                  <td className="num">{fmtNum(s.explicit)}</td>
+                  <td className="num">{fmtNum(s.inherited)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
     </>
   );
 }
