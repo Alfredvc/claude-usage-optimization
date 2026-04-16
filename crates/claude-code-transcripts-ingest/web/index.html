@@ -1492,6 +1492,31 @@ function TopTurnsTable({ data, navigateToSession }) {
   );
 }
 
+// ── CacheInvalidationPanel ────────────────────────────────────────────────
+function CacheInvalidationPanel({ data }) {
+  if (!data) return <div className="muted">No data</div>;
+  const { threshold_p90, events } = data;
+  if (!events || events.length === 0) return <div className="muted">No high-CC mid-session events in range</div>;
+  return (
+    <div>
+      <div className="muted" style={{ marginBottom: 8, fontSize: '0.85em' }}>
+        High-CC threshold: &gt;{(threshold_p90 || 0).toLocaleString()} tokens (your p90)
+      </div>
+      <table className="data-table">
+        <thead><tr><th>Gap</th><th>CC type</th><th>Events</th><th>Cost</th></tr></thead>
+        <tbody>{events.map((r, i) => (
+          <tr key={i}>
+            <td>{r.gap_bucket}</td>
+            <td>{r.cc_type}</td>
+            <td>{r.events}</td>
+            <td>${(r.cost_usd || 0).toFixed(2)}</td>
+          </tr>
+        ))}</tbody>
+      </table>
+    </div>
+  );
+}
+
 // ── GlobalDashboard ────────────────────────────────────────────────────────
 function GlobalDashboard({ timeRange, projects, navigateToSession }) {
   const urls = useMemo(() => ({
@@ -1513,6 +1538,7 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
     topTurns:            buildUrl('/api/dashboard/top-turns', timeRange),
     twoRegime:           buildUrl('/api/dashboard/two-regime', timeRange),
     firstTurnCc:         buildUrl('/api/dashboard/first-turn-cc', timeRange),
+    cacheInval:          buildUrl('/api/dashboard/cache-invalidation', timeRange),
   }), [timeRange]);
   const summary            = usePanel(urls.summary);
   const daily              = usePanel(urls.daily);
@@ -1531,6 +1557,7 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
   const topTurns            = usePanel(urls.topTurns);
   const twoRegime           = usePanel(urls.twoRegime);
   const firstTurnCc         = usePanel(urls.firstTurnCc);
+  const cacheInval          = usePanel(urls.cacheInval);
 
   return (
     <>
@@ -1546,6 +1573,9 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
       </Panel>
       <Panel title="First-turn Cache-Creation Distribution" meta="system-prompt size proxy" loading={firstTurnCc.loading} err={firstTurnCc.err}>
         <FirstTurnCcChart data={firstTurnCc.data} />
+      </Panel>
+      <Panel title="Cache Invalidation Events" meta="mid-session high-CC turns by gap × type" loading={cacheInval.loading} err={cacheInval.err}>
+        <CacheInvalidationPanel data={cacheInval.data} />
       </Panel>
       <Panel title="Token-type Cost Split" meta="main-chain vs sidechain · derived from model_pricing" loading={tokenStreams.loading} err={tokenStreams.err}>
         <TokenStreamsPanel data={tokenStreams.data} />

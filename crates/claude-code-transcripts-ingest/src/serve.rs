@@ -2219,6 +2219,109 @@ async fn api_dashboard_first_turn_cc(
     }
 }
 
+async fn api_dashboard_cache_invalidation(
+    State(state): State<AppState>,
+    Query(q): Query<DashboardQ>,
+) -> Response {
+    let (from, to) = time_bounds(&q);
+    let db_path = state.db_path.clone();
+    let result = spawn_blocking(move || -> Result<Value, String> {
+        let conn = open_db(&db_path)?;
+
+        // Step 1: compute p90 threshold
+        let threshold_p90: f64 = conn
+            .query_row(
+                "WITH base AS (
+                   SELECT
+                     (COALESCE(d.cache_creation_5m,0) + COALESCE(d.cache_creation_1h,0)
+                      + CASE WHEN COALESCE(d.cache_creation_5m,0)+COALESCE(d.cache_creation_1h,0)=0
+                             THEN COALESCE(d.cache_creation_input_tokens,0) ELSE 0 END) AS cc_total
+                   FROM entries e
+                   JOIN assistant_entries_deduped d
+                     ON d.entry_id=e.entry_id AND d.message_id IS NOT NULL
+                   WHERE CAST(e.timestamp AS TIMESTAMP) >= CAST(? AS TIMESTAMP)
+                     AND CAST(e.timestamp AS TIMESTAMP) <  CAST(? AS TIMESTAMP)
+                 )
+                 SELECT QUANTILE_CONT(cc_total, 0.9) FROM base",
+                [&from, &to],
+                |row| row.get::<_, f64>(0),
+            )
+            .map_err(|e| e.to_string())?;
+
+        // Step 2: gap × cc_type aggregation using the computed threshold
+        let mut stmt = conn
+            .prepare(
+                "WITH seq AS (
+                   SELECT
+                     t.session_id,
+                     d.cost_usd,
+                     COALESCE(d.cache_creation_5m,0) AS cc5m,
+                     COALESCE(d.cache_creation_1h,0) AS cc1h,
+                     (COALESCE(d.cache_creation_5m,0) + COALESCE(d.cache_creation_1h,0)
+                      + CASE WHEN COALESCE(d.cache_creation_5m,0)+COALESCE(d.cache_creation_1h,0)=0
+                             THEN COALESCE(d.cache_creation_input_tokens,0) ELSE 0 END) AS cc_total,
+                     e.timestamp,
+                     LAG(e.timestamp) OVER (PARTITION BY t.session_id ORDER BY e.timestamp) AS prev_ts,
+                     ROW_NUMBER() OVER (PARTITION BY t.session_id ORDER BY e.timestamp) AS rn
+                   FROM entries e
+                   JOIN transcripts t ON t.file_path = e.file_path
+                   JOIN assistant_entries_deduped d
+                     ON d.entry_id=e.entry_id AND d.message_id IS NOT NULL
+                   WHERE NOT t.is_subagent
+                     AND CAST(e.timestamp AS TIMESTAMP) >= CAST(? AS TIMESTAMP)
+                     AND CAST(e.timestamp AS TIMESTAMP) <  CAST(? AS TIMESTAMP)
+                 )
+                 SELECT
+                   CASE
+                     WHEN prev_ts IS NULL THEN 'first-turn'
+                     WHEN datediff('minute', prev_ts, timestamp) < 5   THEN '<5m'
+                     WHEN datediff('minute', prev_ts, timestamp) < 55  THEN '5-55m'
+                     WHEN datediff('minute', prev_ts, timestamp) < 65  THEN '55-65m'
+                     ELSE '>65m'
+                   END AS gap_bucket,
+                   CASE
+                     WHEN cc1h > cc5m THEN '1h-dominant'
+                     WHEN cc5m > 0    THEN '5m-dominant'
+                     ELSE 'legacy-cc'
+                   END AS cc_type,
+                   COUNT(*) AS events,
+                   ROUND(SUM(cost_usd), 2) AS cost_usd
+                 FROM seq
+                 WHERE rn > 1 AND cc_total > ?
+                 GROUP BY gap_bucket, cc_type
+                 ORDER BY cost_usd DESC",
+            )
+            .map_err(|e| e.to_string())?;
+
+        let events: Vec<Value> = stmt
+            .query_map(
+                duckdb::params![from.as_str(), to.as_str(), threshold_p90],
+                |row| {
+                    Ok(json!({
+                        "gap_bucket": row.get::<_, String>(0)?,
+                        "cc_type":    row.get::<_, String>(1)?,
+                        "events":     row.get::<_, i64>(2)?,
+                        "cost_usd":   row.get::<_, f64>(3)?,
+                    }))
+                },
+            )
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(json!({
+            "threshold_p90": threshold_p90,
+            "events":        events,
+        }))
+    })
+    .await;
+    match result {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => err500(e),
+        Err(e) => err500(e),
+    }
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 pub async fn run(args: ServeArgs) {
@@ -2268,6 +2371,10 @@ pub async fn run(args: ServeArgs) {
         .route(
             "/api/dashboard/first-turn-cc",
             get(api_dashboard_first_turn_cc),
+        )
+        .route(
+            "/api/dashboard/cache-invalidation",
+            get(api_dashboard_cache_invalidation),
         )
         .with_state(state);
 
