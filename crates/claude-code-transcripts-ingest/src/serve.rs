@@ -2520,6 +2520,55 @@ async fn api_dashboard_hooks(
     }
 }
 
+async fn api_dashboard_read_sizes(
+    State(state): State<AppState>,
+    Query(q): Query<DashboardQ>,
+) -> Response {
+    let (from, to) = time_bounds(&q);
+    let db_path = state.db_path.clone();
+    let result = spawn_blocking(move || -> Result<Value, String> {
+        let conn = open_db(&db_path)?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT \
+                   json_extract_string(acb.tool_input, '$.file_path') AS file_path, \
+                   LENGTH(CAST(ucb.tool_result_content AS VARCHAR)) AS result_chars, \
+                   e.session_id, \
+                   regexp_extract(e.file_path, '.*/projects/([^/]+)/[^/]+\\.jsonl$', 1) AS project, \
+                   e.timestamp::VARCHAR AS ts \
+                 FROM assistant_content_blocks acb \
+                 JOIN user_content_blocks ucb ON ucb.tool_use_id = acb.tool_use_id \
+                 JOIN entries e ON e.entry_id = ucb.entry_id \
+                 WHERE acb.tool_name = 'Read' \
+                   AND CAST(e.timestamp AS TIMESTAMP) >= CAST(? AS TIMESTAMP) \
+                   AND CAST(e.timestamp AS TIMESTAMP) <  CAST(? AS TIMESTAMP) \
+                 ORDER BY result_chars DESC \
+                 LIMIT 50",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows: Vec<Value> = stmt
+            .query_map([&from, &to], |row| {
+                Ok(json!({
+                    "file_path":    row.get::<_, Option<String>>(0)?,
+                    "result_chars": row.get::<_, i64>(1)?,
+                    "session_id":   row.get::<_, Option<String>>(2)?,
+                    "project":      row.get::<_, Option<String>>(3)?,
+                    "ts":           row.get::<_, Option<String>>(4)?,
+                }))
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(json!({ "rows": rows }))
+    })
+    .await;
+    match result {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => err500(e),
+        Err(e) => err500(e),
+    }
+}
+
 async fn api_dashboard_mcp_tools(
     State(state): State<AppState>,
     Query(q): Query<DashboardQ>,
@@ -2630,6 +2679,7 @@ pub async fn run(args: ServeArgs) {
         .route("/api/dashboard/hour-of-day", get(api_dashboard_hour_of_day))
         .route("/api/dashboard/hooks", get(api_dashboard_hooks))
         .route("/api/dashboard/mcp-tools", get(api_dashboard_mcp_tools))
+        .route("/api/dashboard/read-sizes", get(api_dashboard_read_sizes))
         .with_state(state);
 
     let addr = format!("127.0.0.1:{port}");

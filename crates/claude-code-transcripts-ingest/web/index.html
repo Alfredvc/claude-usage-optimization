@@ -1562,6 +1562,32 @@ function HooksPanel({ data }) {
   );
 }
 
+// ── ReadSizesPanel ─────────────────────────────────────────────────────────
+function ReadSizesPanel({ data, navigateToSession }) {
+  const rows = data?.rows || [];
+  if (rows.length === 0) return <div className="muted">No Read calls in range</div>;
+  return (
+    <table className="data-table">
+      <thead><tr>
+        <th>File</th>
+        <th className="num">Size (chars)</th>
+        <th>Session</th>
+        <th>Time</th>
+      </tr></thead>
+      <tbody>{rows.map((r, i) => (
+        <tr key={i} style={{ cursor: navigateToSession ? 'pointer' : undefined }}
+            onClick={() => navigateToSession && navigateToSession(r.project, r.session_id)}>
+          <td style={{ fontFamily: 'monospace', fontSize: '0.85em', maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+              title={r.file_path}>{r.file_path || '—'}</td>
+          <td className="num">{fmtNum(r.result_chars || 0)}</td>
+          <td className="link" style={{ fontFamily: 'monospace', fontSize: '0.85em' }}>{(r.session_id || '').slice(0, 8)}</td>
+          <td>{fmtDate(r.ts)}</td>
+        </tr>
+      ))}</tbody>
+    </table>
+  );
+}
+
 // ── McpToolsPanel ──────────────────────────────────────────────────────────
 function McpToolsPanel({ data }) {
   const rows = data?.rows || [];
@@ -1659,6 +1685,7 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
     hourOfDay:           buildUrl('/api/dashboard/hour-of-day', timeRange),
     hooks:               buildUrl('/api/dashboard/hooks', timeRange),
     mcpTools:            buildUrl('/api/dashboard/mcp-tools', timeRange),
+    readSizes:           buildUrl('/api/dashboard/read-sizes', timeRange),
   }), [timeRange]);
   const summary            = usePanel(urls.summary);
   const daily              = usePanel(urls.daily);
@@ -1682,6 +1709,7 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
   const hourOfDay           = usePanel(urls.hourOfDay);
   const hooks               = usePanel(urls.hooks);
   const mcpTools            = usePanel(urls.mcpTools);
+  const readSizes           = usePanel(urls.readSizes);
 
   return (
     <>
@@ -1751,6 +1779,9 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
       </Panel>
       <Panel title="MCP Tool Result Sizes" loading={mcpTools.loading} err={mcpTools.err}>
         <McpToolsPanel data={mcpTools.data} />
+      </Panel>
+      <Panel title="Top Reads by Size" loading={readSizes.loading} err={readSizes.err}>
+        <ReadSizesPanel data={readSizes.data} navigateToSession={navigateToSession} />
       </Panel>
     </>
   );
