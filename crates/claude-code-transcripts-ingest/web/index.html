@@ -1354,6 +1354,52 @@ function ArtifactLeaderboard({ data, kind, navigateToSession }) {
   );
 }
 
+// ── ContextSizePanel ───────────────────────────────────────────────────────
+function ContextSizePanel({ data, navigateToSession }) {
+  if (!data) return <div className="muted">No data</div>;
+  const { BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer } = Recharts;
+  const { distribution, big_sessions } = data;
+
+  const chartData = (distribution || []).map(r => ({
+    bucket: r.bucket,
+    main:   (r.sessions || 0) - (r.subagent_sessions || 0),
+    subagent: r.subagent_sessions || 0,
+  }));
+
+  return (
+    <div>
+      <ResponsiveContainer width="100%" height={180}>
+        <BarChart data={chartData} margin={{ top: 4, right: 20, bottom: 4, left: 0 }}>
+          <XAxis dataKey="bucket" />
+          <YAxis />
+          <Tooltip />
+          <Legend />
+          <Bar dataKey="main"     stackId="a" fill="#6baed6" name="main sessions" />
+          <Bar dataKey="subagent" stackId="a" fill="#a78bfa" name="subagent sessions" />
+        </BarChart>
+      </ResponsiveContainer>
+      {big_sessions && big_sessions.length > 0 && (
+        <>
+          <div style={{ marginTop: 12, fontWeight: 600, fontSize: '0.9em' }}>Sessions ≥200k tokens (top {big_sessions.length} by cost)</div>
+          <table className="data-table" style={{ marginTop: 6 }}>
+            <thead><tr><th>Session</th><th>Peak ctx</th><th>Cost</th><th>Turns</th><th>Subagent?</th></tr></thead>
+            <tbody>{big_sessions.map((r, i) => (
+              <tr key={i} style={{ cursor: 'pointer' }}
+                  onClick={() => navigateToSession(r.project, r.session_id)}>
+                <td style={{ fontFamily: 'monospace', fontSize: '0.85em' }}>{(r.session_id || '').slice(0,8)}</td>
+                <td>{r.peak_ctx != null ? `${(r.peak_ctx/1000).toFixed(0)}k` : '—'}</td>
+                <td>${(r.cost_usd || 0).toFixed(2)}</td>
+                <td>{r.turn_count}</td>
+                <td>{r.is_subagent ? 'yes' : 'no'}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ── GlobalDashboard ────────────────────────────────────────────────────────
 function GlobalDashboard({ timeRange, projects, navigateToSession }) {
   const urls = useMemo(() => ({
@@ -1371,6 +1417,7 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
     artifactWrites:      buildUrl('/api/dashboard/artifacts', timeRange, { kind: 'write' }),
     artifactAgents:      buildUrl('/api/dashboard/artifacts', timeRange, { kind: 'agent' }),
     artifactToolResults: buildUrl('/api/dashboard/artifacts', timeRange, { kind: 'tool_result' }),
+    ctxSize:             buildUrl('/api/dashboard/context-size', timeRange),
   }), [timeRange]);
   const summary            = usePanel(urls.summary);
   const daily              = usePanel(urls.daily);
@@ -1385,6 +1432,7 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
   const artifactWrites      = usePanel(urls.artifactWrites);
   const artifactAgents      = usePanel(urls.artifactAgents);
   const artifactToolResults = usePanel(urls.artifactToolResults);
+  const ctxSize             = usePanel(urls.ctxSize);
 
   return (
     <>
@@ -1427,6 +1475,9 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
       </Panel>
       <Panel title="Artifact Leaderboard: Tool Results" meta="top 30 by result size" loading={artifactToolResults.loading} err={artifactToolResults.err}>
         <ArtifactLeaderboard data={artifactToolResults.data} kind="tool_result" navigateToSession={navigateToSession} />
+      </Panel>
+      <Panel title="Context Size Distribution" meta="peak tokens per session · click 200k+ rows to open transcript" loading={ctxSize.loading} err={ctxSize.err}>
+        <ContextSizePanel data={ctxSize.data} navigateToSession={navigateToSession} />
       </Panel>
     </>
   );

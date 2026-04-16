@@ -1895,6 +1895,127 @@ async fn api_dashboard_artifacts(
     }
 }
 
+async fn api_dashboard_context_size(
+    State(state): State<AppState>,
+    Query(q): Query<DashboardQ>,
+) -> Response {
+    let (from, to) = time_bounds(&q);
+    let db_path = state.db_path.clone();
+    let result = spawn_blocking(move || -> Result<Value, String> {
+        let conn = open_db(&db_path)?;
+
+        // Distribution
+        let dist_sql = "
+WITH per_turn AS (
+  SELECT
+    t.session_id,
+    t.is_subagent,
+    d.input_tokens
+      + COALESCE(d.cache_read_input_tokens, 0)
+      + COALESCE(d.cache_creation_input_tokens, 0) AS context_size
+  FROM entries e
+  JOIN transcripts t ON t.file_path = e.file_path
+  JOIN assistant_entries_deduped d
+    ON d.entry_id = e.entry_id AND d.message_id IS NOT NULL
+  WHERE CAST(e.timestamp AS TIMESTAMP) >= CAST(? AS TIMESTAMP)
+    AND CAST(e.timestamp AS TIMESTAMP) <  CAST(? AS TIMESTAMP)
+),
+per_session AS (
+  SELECT session_id, is_subagent, MAX(context_size) AS peak_ctx
+  FROM per_turn
+  GROUP BY session_id, is_subagent
+)
+SELECT
+  CASE
+    WHEN peak_ctx < 50000   THEN '<50k'
+    WHEN peak_ctx < 100000  THEN '50-100k'
+    WHEN peak_ctx < 200000  THEN '100-200k'
+    WHEN peak_ctx < 500000  THEN '200-500k'
+    ELSE '500k+'
+  END AS bucket,
+  COUNT(*) AS sessions,
+  COUNT(*) FILTER (WHERE is_subagent) AS subagent_sessions
+FROM per_session
+GROUP BY bucket
+ORDER BY
+  CASE bucket
+    WHEN '<50k' THEN 1 WHEN '50-100k' THEN 2 WHEN '100-200k' THEN 3
+    WHEN '200-500k' THEN 4 ELSE 5 END";
+
+        let mut stmt = conn.prepare(dist_sql).map_err(|e| e.to_string())?;
+        let dist_rows: Vec<Value> = stmt
+            .query_map([&from, &to], |row| {
+                Ok(json!({
+                    "bucket":           row.get::<_, String>(0)?,
+                    "sessions":         row.get::<_, i64>(1)?,
+                    "subagent_sessions":row.get::<_, i64>(2)?,
+                }))
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        // Big sessions
+        let big_sql = "
+WITH per_turn AS (
+  SELECT
+    t.session_id,
+    t.is_subagent,
+    regexp_extract(t.file_path, '.*/projects/([^/]+)/[^/]+\\.jsonl$', 1) AS project,
+    d.input_tokens
+      + COALESCE(d.cache_read_input_tokens, 0)
+      + COALESCE(d.cache_creation_input_tokens, 0) AS context_size,
+    d.cost_usd
+  FROM entries e
+  JOIN transcripts t ON t.file_path = e.file_path
+  JOIN assistant_entries_deduped d
+    ON d.entry_id = e.entry_id AND d.message_id IS NOT NULL
+  WHERE CAST(e.timestamp AS TIMESTAMP) >= CAST(? AS TIMESTAMP)
+    AND CAST(e.timestamp AS TIMESTAMP) <  CAST(? AS TIMESTAMP)
+),
+per_session AS (
+  SELECT session_id, is_subagent, project,
+         MAX(context_size) AS peak_ctx,
+         ROUND(SUM(cost_usd), 4) AS cost_usd,
+         COUNT(*) AS turn_count
+  FROM per_turn
+  GROUP BY session_id, is_subagent, project
+)
+SELECT session_id, project, is_subagent, peak_ctx, cost_usd, turn_count
+FROM per_session
+WHERE peak_ctx >= 200000
+ORDER BY cost_usd DESC
+LIMIT 20";
+
+        let mut stmt2 = conn.prepare(big_sql).map_err(|e| e.to_string())?;
+        let big_rows: Vec<Value> = stmt2
+            .query_map([&from, &to], |row| {
+                Ok(json!({
+                    "session_id":  row.get::<_, Option<String>>(0)?,
+                    "project":     row.get::<_, Option<String>>(1)?,
+                    "is_subagent": row.get::<_, Option<bool>>(2)?,
+                    "peak_ctx":    row.get::<_, Option<i64>>(3)?,
+                    "cost_usd":    row.get::<_, Option<f64>>(4)?,
+                    "turn_count":  row.get::<_, Option<i64>>(5)?,
+                }))
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(json!({
+            "distribution":  dist_rows,
+            "big_sessions":  big_rows,
+        }))
+    })
+    .await;
+    match result {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => err500(e),
+        Err(e) => err500(e),
+    }
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 pub async fn run(args: ServeArgs) {
@@ -1935,6 +2056,10 @@ pub async fn run(args: ServeArgs) {
             get(api_dashboard_token_streams),
         )
         .route("/api/dashboard/artifacts", get(api_dashboard_artifacts))
+        .route(
+            "/api/dashboard/context-size",
+            get(api_dashboard_context_size),
+        )
         .with_state(state);
 
     let addr = format!("127.0.0.1:{port}");
