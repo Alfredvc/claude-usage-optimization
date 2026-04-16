@@ -2322,6 +2322,65 @@ async fn api_dashboard_cache_invalidation(
     }
 }
 
+async fn api_dashboard_compactions(
+    State(state): State<AppState>,
+    Query(q): Query<DashboardQ>,
+) -> Response {
+    let (from, to) = time_bounds(&q);
+    let db_path = state.db_path.clone();
+    let result = spawn_blocking(move || -> Result<Value, String> {
+        let conn = open_db(&db_path)?;
+        let mut stmt = conn.prepare(
+            "WITH comp AS (
+               SELECT s.session_id, e.timestamp AS comp_ts, s.summary, s.entry_id AS comp_entry_id
+               FROM summary_entries s
+               JOIN entries e ON e.uuid = s.leaf_uuid
+               WHERE CAST(e.timestamp AS TIMESTAMP) >= CAST(? AS TIMESTAMP)
+                 AND CAST(e.timestamp AS TIMESTAMP) <  CAST(? AS TIMESTAMP)
+             ),
+             next_turn AS (
+               SELECT
+                 c.session_id, c.comp_ts, c.summary,
+                 ae.cost_usd,
+                 ne.timestamp AS turn_ts,
+                 regexp_extract(ne.file_path, '.*/projects/([^/]+)/[^/]+\\.jsonl$', 1) AS project,
+                 datediff('minute', c.comp_ts, ne.timestamp) AS gap_min
+               FROM comp c
+               JOIN entries ne ON ne.session_id = c.session_id
+                               AND ne.timestamp > c.comp_ts
+               JOIN assistant_entries_deduped ae
+                 ON ae.entry_id = ne.entry_id AND ae.message_id IS NOT NULL
+               QUALIFY ROW_NUMBER() OVER (PARTITION BY c.session_id, c.comp_ts ORDER BY ne.timestamp) = 1
+             )
+             SELECT session_id, project, comp_ts::VARCHAR AS comp_ts, gap_min,
+                    ROUND(cost_usd, 4) AS next_turn_cost,
+                    SUBSTR(summary, 1, 120) AS summary_preview
+             FROM next_turn
+             ORDER BY next_turn_cost DESC
+             LIMIT 50"
+        ).map_err(|e| e.to_string())?;
+
+        let rows: Vec<Value> = stmt.query_map([&from, &to], |row| {
+            Ok(json!({
+                "session_id":      row.get::<_, Option<String>>(0)?,
+                "project":         row.get::<_, Option<String>>(1)?,
+                "comp_ts":         row.get::<_, Option<String>>(2)?,
+                "gap_min":         row.get::<_, Option<i64>>(3)?,
+                "next_turn_cost":  row.get::<_, Option<f64>>(4)?,
+                "summary_preview": row.get::<_, Option<String>>(5)?,
+            }))
+        }).map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok()).collect();
+
+        Ok(json!({ "count": rows.len(), "events": rows }))
+    }).await;
+    match result {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => err500(e),
+        Err(e) => err500(e),
+    }
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 pub async fn run(args: ServeArgs) {
@@ -2376,6 +2435,7 @@ pub async fn run(args: ServeArgs) {
             "/api/dashboard/cache-invalidation",
             get(api_dashboard_cache_invalidation),
         )
+        .route("/api/dashboard/compactions", get(api_dashboard_compactions))
         .with_state(state);
 
     let addr = format!("127.0.0.1:{port}");

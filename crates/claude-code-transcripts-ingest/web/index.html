@@ -1517,6 +1517,31 @@ function CacheInvalidationPanel({ data }) {
   );
 }
 
+// ── CompactionsPanel ───────────────────────────────────────────────────────
+function CompactionsPanel({ data }) {
+  if (!data) return <div className="muted">No data</div>;
+  const { count, events } = data;
+  if (!events || events.length === 0)
+    return <div className="muted">No compaction events in this window</div>;
+  return (
+    <div>
+      <div style={{ marginBottom: 8, fontSize: '0.9em' }}>{count} compaction event{count !== 1 ? 's' : ''}</div>
+      <table className="data-table">
+        <thead><tr><th>Session</th><th>Gap</th><th>Next turn $</th><th>Summary preview</th></tr></thead>
+        <tbody>{events.map((r, i) => (
+          <tr key={i}>
+            <td style={{ fontFamily: 'monospace', fontSize: '0.85em' }}>{(r.session_id||'').slice(0,8)}</td>
+            <td>{r.gap_min != null ? `${r.gap_min}m` : '—'}</td>
+            <td>${(r.next_turn_cost||0).toFixed(4)}</td>
+            <td style={{ maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                title={r.summary_preview}>{r.summary_preview||'—'}</td>
+          </tr>
+        ))}</tbody>
+      </table>
+    </div>
+  );
+}
+
 // ── GlobalDashboard ────────────────────────────────────────────────────────
 function GlobalDashboard({ timeRange, projects, navigateToSession }) {
   const urls = useMemo(() => ({
@@ -1539,6 +1564,7 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
     twoRegime:           buildUrl('/api/dashboard/two-regime', timeRange),
     firstTurnCc:         buildUrl('/api/dashboard/first-turn-cc', timeRange),
     cacheInval:          buildUrl('/api/dashboard/cache-invalidation', timeRange),
+    compactions:         buildUrl('/api/dashboard/compactions', timeRange),
   }), [timeRange]);
   const summary            = usePanel(urls.summary);
   const daily              = usePanel(urls.daily);
@@ -1558,6 +1584,7 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
   const twoRegime           = usePanel(urls.twoRegime);
   const firstTurnCc         = usePanel(urls.firstTurnCc);
   const cacheInval          = usePanel(urls.cacheInval);
+  const compactions         = usePanel(urls.compactions);
 
   return (
     <>
@@ -1615,6 +1642,9 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
       </Panel>
       <Panel title="Top 1% Most-Expensive Turns" meta="top 30 by cost · click to open session" loading={topTurns.loading} err={topTurns.err}>
         <TopTurnsTable data={topTurns.data} navigateToSession={navigateToSession} />
+      </Panel>
+      <Panel title="Compaction Events" loading={compactions.loading} err={compactions.err}>
+        <CompactionsPanel data={compactions.data} />
       </Panel>
     </>
   );
