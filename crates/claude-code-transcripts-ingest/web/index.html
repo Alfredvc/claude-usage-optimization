@@ -930,6 +930,38 @@ function DailySpendChart({ data }) {
   );
 }
 
+// ── TwoRegimeChart ─────────────────────────────────────────────────────────
+function TwoRegimeChart({ data }) {
+  if (!data || data.length === 0) return <div className="panel-loading">No data</div>;
+  const { ComposedChart, Bar, Line, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer } = window.Recharts || {};
+  if (!ComposedChart) return <div className="panel-error">Recharts not loaded</div>;
+  const chartData = data.map(d => ({
+    week: (d.week || '').slice(5, 10),
+    session_count: d.session_count || 0,
+    median_cost: d.median_cost || 0,
+    p90_cost: d.p90_cost || 0,
+  }));
+  return (
+    <div style={{ width: '100%', height: 220 }}>
+      <ResponsiveContainer width="100%" height="100%">
+        <ComposedChart data={chartData} margin={{ top: 6, right: 50, left: 0, bottom: 4 }}>
+          <XAxis dataKey="week" stroke="#8b949e" tick={{ fontSize: 10 }} />
+          <YAxis yAxisId="left" stroke="#8b949e" tick={{ fontSize: 10 }} label={{ value: 'sessions', angle: -90, position: 'insideLeft', style: { fontSize: 10, fill: '#8b949e' } }} />
+          <YAxis yAxisId="right" orientation="right" stroke="#8b949e" tick={{ fontSize: 10 }} tickFormatter={v => `$${v}`} label={{ value: '$/session', angle: 90, position: 'insideRight', style: { fontSize: 10, fill: '#8b949e' } }} />
+          <Tooltip
+            contentStyle={{ background: '#1c2128', border: '1px solid #30363d', fontSize: 11 }}
+            formatter={(v, n) => n === 'sessions' ? [v, n] : [fmtCost(v), n]}
+          />
+          <Legend wrapperStyle={{ fontSize: 11 }} />
+          <Bar yAxisId="left" dataKey="session_count" name="sessions" fill="#3b82f6" opacity={0.7} />
+          <Line yAxisId="right" type="monotone" dataKey="median_cost" name="median $/session" stroke="#22c55e" strokeWidth={2} dot={{ r: 3 }} />
+          <Line yAxisId="right" type="monotone" dataKey="p90_cost" name="p90 $/session" stroke="#f59e0b" strokeWidth={2} dot={{ r: 3 }} strokeDasharray="4 2" />
+        </ComposedChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
 // ── ModelBreakdownTable ────────────────────────────────────────────────────
 function ModelBreakdownTable({ data }) {
   if (!data || data.length === 0) return <div className="panel-loading">No data</div>;
@@ -1450,6 +1482,7 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
     artifactToolResults: buildUrl('/api/dashboard/artifacts', timeRange, { kind: 'tool_result' }),
     ctxSize:             buildUrl('/api/dashboard/context-size', timeRange),
     topTurns:            buildUrl('/api/dashboard/top-turns', timeRange),
+    twoRegime:           buildUrl('/api/dashboard/two-regime', timeRange),
   }), [timeRange]);
   const summary            = usePanel(urls.summary);
   const daily              = usePanel(urls.daily);
@@ -1466,6 +1499,7 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
   const artifactToolResults = usePanel(urls.artifactToolResults);
   const ctxSize             = usePanel(urls.ctxSize);
   const topTurns            = usePanel(urls.topTurns);
+  const twoRegime           = usePanel(urls.twoRegime);
 
   return (
     <>
@@ -1475,6 +1509,9 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
       </Panel>
       <Panel title="Daily Spend by Model" loading={daily.loading} err={daily.err}>
         <DailySpendChart data={daily.data} />
+      </Panel>
+      <Panel title="Sessions/Week + $/Session" meta="volume vs per-session cost · main sessions only" loading={twoRegime.loading} err={twoRegime.err}>
+        <TwoRegimeChart data={twoRegime.data} />
       </Panel>
       <Panel title="Token-type Cost Split" meta="main-chain vs sidechain · derived from model_pricing" loading={tokenStreams.loading} err={tokenStreams.err}>
         <TokenStreamsPanel data={tokenStreams.data} />

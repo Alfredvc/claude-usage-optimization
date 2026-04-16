@@ -2091,6 +2091,66 @@ async fn api_dashboard_top_turns(
     }
 }
 
+async fn api_dashboard_two_regime(
+    State(state): State<AppState>,
+    Query(q): Query<DashboardQ>,
+) -> Response {
+    let (from, to) = time_bounds(&q);
+    let db_path = state.db_path.clone();
+    let result = spawn_blocking(move || -> Result<Value, String> {
+        let conn = open_db(&db_path)?;
+        let mut stmt = conn
+            .prepare(
+                "WITH per_session AS (
+                   SELECT
+                     t.session_id,
+                     date_trunc('week', MIN(e.timestamp)) AS week,
+                     SUM(d.cost_usd) AS cost_usd
+                   FROM entries e
+                   JOIN transcripts t ON t.file_path = e.file_path
+                   JOIN assistant_entries_deduped d
+                     ON d.entry_id = e.entry_id AND d.message_id IS NOT NULL
+                   WHERE CAST(e.timestamp AS TIMESTAMP) >= CAST(? AS TIMESTAMP)
+                     AND CAST(e.timestamp AS TIMESTAMP) <  CAST(? AS TIMESTAMP)
+                     AND NOT t.is_subagent
+                   GROUP BY t.session_id
+                 )
+                 SELECT
+                   week::VARCHAR AS week,
+                   COUNT(*) AS session_count,
+                   ROUND(AVG(cost_usd), 4) AS avg_cost,
+                   ROUND(QUANTILE_CONT(cost_usd, 0.5), 4) AS median_cost,
+                   ROUND(QUANTILE_CONT(cost_usd, 0.9), 4) AS p90_cost,
+                   ROUND(SUM(cost_usd), 4) AS total_cost
+                 FROM per_session
+                 GROUP BY week
+                 ORDER BY week",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows: Vec<Value> = stmt
+            .query_map([&from, &to], |row| {
+                Ok(json!({
+                    "week":          row.get::<_, Option<String>>(0)?,
+                    "session_count": row.get::<_, i64>(1)?,
+                    "avg_cost":      row.get::<_, f64>(2)?,
+                    "median_cost":   row.get::<_, f64>(3)?,
+                    "p90_cost":      row.get::<_, f64>(4)?,
+                    "total_cost":    row.get::<_, f64>(5)?,
+                }))
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(Value::Array(rows))
+    })
+    .await;
+    match result {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => err500(e),
+        Err(e) => err500(e),
+    }
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 pub async fn run(args: ServeArgs) {
@@ -2136,6 +2196,7 @@ pub async fn run(args: ServeArgs) {
             get(api_dashboard_context_size),
         )
         .route("/api/dashboard/top-turns", get(api_dashboard_top_turns))
+        .route("/api/dashboard/two-regime", get(api_dashboard_two_regime))
         .with_state(state);
 
     let addr = format!("127.0.0.1:{port}");
