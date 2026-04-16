@@ -1443,7 +1443,8 @@ function ArtifactLeaderboard({ data, kind, navigateToSession }) {
 // ── ContextSizePanel ───────────────────────────────────────────────────────
 function ContextSizePanel({ data, navigateToSession }) {
   if (!data) return <div className="muted">No data</div>;
-  const { BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer } = Recharts;
+  const { BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer } = window.Recharts || {};
+  if (!BarChart) return <div className="muted">Recharts not loaded</div>;
   const { distribution, big_sessions } = data;
 
   const chartData = (distribution || []).map(r => ({
@@ -1696,7 +1697,8 @@ function McpToolsPanel({ data }) {
 function HourOfDayChart({ data }) {
   const rows = Array.isArray(data) ? data : [];
   if (rows.length === 0) return <div className="muted">No data</div>;
-  const { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } = Recharts;
+  const { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } = window.Recharts || {};
+  if (!BarChart) return <div className="muted">Recharts not loaded</div>;
   return (
     <ResponsiveContainer width="100%" height={160}>
       <BarChart data={rows} margin={{ top: 4, right: 20, bottom: 4, left: 0 }}>

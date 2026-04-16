@@ -1951,7 +1951,11 @@ WITH per_turn AS (
     t.is_subagent,
     d.input_tokens
       + COALESCE(d.cache_read_input_tokens, 0)
-      + COALESCE(d.cache_creation_input_tokens, 0) AS context_size
+      + COALESCE(d.cache_creation_5m, 0)
+      + COALESCE(d.cache_creation_1h, 0)
+      + CASE WHEN COALESCE(d.cache_creation_5m, 0) + COALESCE(d.cache_creation_1h, 0) = 0
+             THEN COALESCE(d.cache_creation_input_tokens, 0)
+             ELSE 0 END AS context_size
   FROM entries e
   JOIN transcripts t ON t.file_path = e.file_path
   JOIN assistant_entries_deduped d
@@ -2003,7 +2007,11 @@ WITH per_turn AS (
     regexp_extract(t.file_path, '.*/projects/([^/]+)/[^/]+\\.jsonl$', 1) AS project,
     d.input_tokens
       + COALESCE(d.cache_read_input_tokens, 0)
-      + COALESCE(d.cache_creation_input_tokens, 0) AS context_size,
+      + COALESCE(d.cache_creation_5m, 0)
+      + COALESCE(d.cache_creation_1h, 0)
+      + CASE WHEN COALESCE(d.cache_creation_5m, 0) + COALESCE(d.cache_creation_1h, 0) = 0
+             THEN COALESCE(d.cache_creation_input_tokens, 0)
+             ELSE 0 END AS context_size,
     d.cost_usd
   FROM entries e
   JOIN transcripts t ON t.file_path = e.file_path

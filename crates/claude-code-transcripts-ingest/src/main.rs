@@ -1,4 +1,5 @@
 mod cli;
+mod info;
 mod parse;
 mod pricing;
 mod run;
@@ -15,5 +16,6 @@ async fn main() {
     match cli.command {
         Command::Ingest(args) => crate::run::run(args),
         Command::Serve(args) => crate::serve::run(args).await,
+        Command::Info(args) => crate::info::run(args),
     }
 }
