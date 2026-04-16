@@ -770,6 +770,7 @@ fn build_timeline(conn: &Connection, file_path: &str, is_subagent: bool) -> Resu
 
                 out.push(json!({
                     "kind":                        "assistant",
+                    "entry_id":                    e.entry_id,
                     "num":                         api_num,
                     "timestamp":                   e.timestamp,
                     "model":                       ad.model,

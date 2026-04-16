@@ -799,7 +799,7 @@ function SessionTotals({ timeline }) {
 // ── renderItem ─────────────────────────────────────────────────────────────
 function renderItem(item, idx, maxCost, sessionId, agentCache = {}) {
   if (item.kind === 'user')      return <UserCard key={idx} item={item} />;
-  if (item.kind === 'assistant') return <ApiCard  key={idx} id={`api-item-${idx}`} item={item} maxCost={maxCost} sessionId={sessionId} agentCache={agentCache} />;
+  if (item.kind === 'assistant') return <ApiCard  key={idx} id={item.entry_id != null ? `entry-${item.entry_id}` : `api-item-${idx}`} item={item} maxCost={maxCost} sessionId={sessionId} agentCache={agentCache} />;
   return null;
 }
 
@@ -812,6 +812,7 @@ function getUrlParams() {
     sort: p.get('sort') || 'date',
     tab: p.get('tab') || 'dashboard',
     range: p.get('range') || '30d',
+    entry: p.get('entry') || '',
   };
 }
 
@@ -1503,7 +1504,7 @@ function TopTurnsTable({ data, navigateToSession }) {
       </thead>
       <tbody>{rows.map((r, i) => (
         <tr key={i} style={{ cursor: 'pointer' }}
-            onClick={() => navigateToSession(r.project, r.session_id)}>
+            onClick={() => navigateToSession(r.project, r.session_id, r.entry_id)}>
           <td style={{ fontSize: '0.8em', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.model || '—'}</td>
           <td>${(r.cost_usd || 0).toFixed(4)}</td>
           <td>{fmtK(r.input_tokens)}</td>
@@ -1910,7 +1911,7 @@ function DashboardView({ timeRange, projects, navigateToSession }) {
 }
 
 // ── TranscriptView ─────────────────────────────────────────────────────────
-function TranscriptView({ selectedProject, initialSessionId, initialSort }) {
+function TranscriptView({ selectedProject, initialSessionId, initialSort, targetEntry, clearTargetEntry }) {
   const [sessions,    setSessions]    = useState([]);
   const [sessionId,   setSessionId]   = useState(initialSessionId || '');
   const [sortBy,      setSortBy]      = useState(initialSort || 'date');
@@ -1922,14 +1923,15 @@ function TranscriptView({ selectedProject, initialSessionId, initialSort }) {
   // Preserve URL session on first project load; cleared after first use
   const initSessionRef = useRef(initialSessionId || null);
 
-  // Sync session + sort back to URL (preserve tab/range/project already set by App)
+  // Sync session + sort + entry back to URL (preserve tab/range/project already set by App)
   useEffect(() => {
     const p = new URLSearchParams(window.location.search);
     if (sessionId) p.set('session', sessionId); else p.delete('session');
     if (sortBy !== 'date') p.set('sort', sortBy); else p.delete('sort');
+    if (targetEntry) p.set('entry', targetEntry); else p.delete('entry');
     const qs = p.toString();
     window.history.replaceState(null, '', qs ? '?' + qs : window.location.pathname);
-  }, [sessionId, sortBy]);
+  }, [sessionId, sortBy, targetEntry]);
 
   // When project changes (or is cleared), load its sessions
   useEffect(() => {
@@ -1984,6 +1986,20 @@ function TranscriptView({ selectedProject, initialSessionId, initialSort }) {
         .catch(() => {});
     }
   }, [timeline, sessionId]);
+
+  // Scroll to target entry after timeline loads
+  useEffect(() => {
+    if (!timeline || !targetEntry) return;
+    requestAnimationFrame(() => {
+      const el = document.getElementById(`entry-${targetEntry}`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        el.style.outline = '2px solid var(--accent)';
+        setTimeout(() => { el.style.outline = ''; }, 2000);
+        if (clearTargetEntry) clearTargetEntry();
+      }
+    });
+  }, [timeline, targetEntry]);
 
   const load = useCallback(async () => {
     if (!selectedProject || !sessionId) return;
@@ -2075,6 +2091,7 @@ function App() {
   const [activeTab,       setActiveTab]       = useState(initUrl.tab === 'transcripts' ? 'transcripts' : 'dashboard');
   const [timeRange,       setTimeRange]       = useState(['7d','30d','90d','all'].includes(initUrl.range) ? initUrl.range : '30d');
   const [transcriptSessionId, setTranscriptSessionId] = useState(initUrl.session);
+  const [targetEntry,     setTargetEntry]     = useState(initUrl.entry);
   const [err,             setErr]             = useState(null);
 
   // Sync top-level state to URL
@@ -2096,9 +2113,10 @@ function App() {
       .catch(() => setErr('Cannot reach server — is claude-code-transcripts-serve running? (cargo run --features serve --bin claude-code-transcripts-serve)'));
   }, []);
 
-  const navigateToSession = useCallback((project, sessionId) => {
+  const navigateToSession = useCallback((project, sessionId, entryId) => {
     setSelectedProject(project || '');
     setTranscriptSessionId(sessionId || '');
+    setTargetEntry(entryId != null ? String(entryId) : '');
     setActiveTab('transcripts');
   }, []);
 
@@ -2163,6 +2181,8 @@ function App() {
             selectedProject={selectedProject}
             initialSessionId={transcriptSessionId}
             initialSort={initUrl.sort}
+            targetEntry={targetEntry}
+            clearTargetEntry={() => setTargetEntry('')}
           />
       }
     </>
