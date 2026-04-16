@@ -70,6 +70,11 @@ If you have any hypothesis as to what could be consuming your usage, ask Claude,
 - **Session rollup.** Fixed header shows total cost, API call count, and token totals by type.
 - **Sort by cost or date.** Session list can sort by most recent or highest spend, so expensive sessions float to the top.
 
+The **Dashboard** tab shows a multi-panel cost breakdown split into two sub-tabs:
+
+- **Overview** — general spend picture: daily spend by model, sessions/week, token-type cost split, model breakdown, errors.
+- **Outliers** — actionable panels: most-expensive turns, top sessions, context-size distribution, cache invalidation events, artifact leaderboards, file hotspots, and more.
+
 <p align="center">
   <img src="docs/assets/transcripts.png" alt="cct serve transcripts" width="800" />
 </p>

@@ -1790,85 +1790,110 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
   const bash                = usePanel(urls.bash);
   const skills              = usePanel(urls.skills);
 
+  const initSub = (new URLSearchParams(window.location.search)).get('sub') === 'outliers' ? 'outliers' : 'overview';
+  const [subTab, setSubTab] = React.useState(initSub);
+
+  React.useEffect(() => {
+    const p = new URLSearchParams(window.location.search);
+    if (subTab !== 'overview') p.set('sub', subTab); else p.delete('sub');
+    const qs = p.toString();
+    window.history.replaceState(null, '', qs ? '?' + qs : window.location.pathname);
+  }, [subTab]);
+
   return (
-    <>
+    <div>
       <BaselineBar url={urls.baseline} />
-      <Panel title="Summary" meta={timeRange === 'all' ? 'all time' : `last ${timeRange}`} loading={summary.loading} err={summary.err}>
-        <SummaryBar data={summary.data} />
-      </Panel>
-      <Panel title="Daily Spend by Model" loading={daily.loading} err={daily.err}>
-        <DailySpendChart data={daily.data} />
-      </Panel>
-      <Panel title="Sessions/Week + $/Session" meta="volume vs per-session cost · main sessions only" loading={twoRegime.loading} err={twoRegime.err}>
-        <TwoRegimeChart data={twoRegime.data} />
-      </Panel>
-      <Panel title="First-turn Cache-Creation Distribution" meta="system-prompt size proxy" loading={firstTurnCc.loading} err={firstTurnCc.err}>
-        <FirstTurnCcChart data={firstTurnCc.data} />
-      </Panel>
-      <Panel title="Cache Invalidation Events" meta="mid-session high-CC turns by gap × type" loading={cacheInval.loading} err={cacheInval.err}>
-        <CacheInvalidationPanel data={cacheInval.data} />
-      </Panel>
-      <Panel title="Token-type Cost Split" meta="main-chain vs sidechain · derived from model_pricing" loading={tokenStreams.loading} err={tokenStreams.err}>
-        <TokenStreamsPanel data={tokenStreams.data} />
-      </Panel>
-      <Panel title="Model Breakdown" loading={models.loading} err={models.err}>
-        <ModelBreakdownTable data={models.data} />
-      </Panel>
-      <Panel title="Cache Health" loading={cache.loading} err={cache.err}>
-        <CacheHealthPanel data={cache.data} />
-      </Panel>
-      <Panel title="Agent Model Usage" loading={agents.loading} err={agents.err}>
-        <AgentModelPanel data={agents.data} />
-      </Panel>
-      <Panel title="Session Distribution" meta="by turn count" loading={dist.loading} err={dist.err}>
-        <SessionDistributionTable data={dist.data} />
-      </Panel>
-      <Panel title="File Hotspots" meta="top 30 by distinct session reads" loading={files.loading} err={files.err}>
-        <FileHotspotsTable data={files.data} />
-      </Panel>
-      <Panel title="Errors" loading={errors.loading} err={errors.err}>
-        <ErrorSummaryPanel data={errors.data} />
-      </Panel>
-      <Panel title="Top Sessions" meta="by cost · click a row to open in Transcripts" loading={top.loading} err={top.err}>
-        <TopSessionsTable data={top.data} projects={projects} navigateToSession={navigateToSession} />
-      </Panel>
-      <Panel title="Artifact Leaderboard: Large Writes" meta="top 30 by content size" loading={artifactWrites.loading} err={artifactWrites.err}>
-        <ArtifactLeaderboard data={artifactWrites.data} kind="write" navigateToSession={navigateToSession} />
-      </Panel>
-      <Panel title="Artifact Leaderboard: Agent Prompts" meta="top 30 by prompt size" loading={artifactAgents.loading} err={artifactAgents.err}>
-        <ArtifactLeaderboard data={artifactAgents.data} kind="agent" navigateToSession={navigateToSession} />
-      </Panel>
-      <Panel title="Artifact Leaderboard: Tool Results" meta="top 30 by result size" loading={artifactToolResults.loading} err={artifactToolResults.err}>
-        <ArtifactLeaderboard data={artifactToolResults.data} kind="tool_result" navigateToSession={navigateToSession} />
-      </Panel>
-      <Panel title="Context Size Distribution" meta="peak tokens per session · click 200k+ rows to open transcript" loading={ctxSize.loading} err={ctxSize.err}>
-        <ContextSizePanel data={ctxSize.data} navigateToSession={navigateToSession} />
-      </Panel>
-      <Panel title="Top 1% Most-Expensive Turns" meta="top 30 by cost · click to open session" loading={topTurns.loading} err={topTurns.err}>
-        <TopTurnsTable data={topTurns.data} navigateToSession={navigateToSession} />
-      </Panel>
-      <Panel title="Compaction Events" loading={compactions.loading} err={compactions.err}>
-        <CompactionsPanel data={compactions.data} />
-      </Panel>
-      <Panel title="Hour-of-Day Cost" loading={hourOfDay.loading} err={hourOfDay.err}>
-        <HourOfDayChart data={hourOfDay.data} />
-      </Panel>
-      <Panel title="Hook Frequency & Duration" meta="hook output size not stored in DB" loading={hooks.loading} err={hooks.err}>
-        <HooksPanel data={hooks.data} />
-      </Panel>
-      <Panel title="MCP Tool Result Sizes" loading={mcpTools.loading} err={mcpTools.err}>
-        <McpToolsPanel data={mcpTools.data} />
-      </Panel>
-      <Panel title="Top Reads by Size" loading={readSizes.loading} err={readSizes.err}>
-        <ReadSizesPanel data={readSizes.data} navigateToSession={navigateToSession} />
-      </Panel>
-      <Panel title="Bash Leaderboards" loading={bash.loading} err={bash.err}>
-        <BashPanel data={bash.data} navigateToSession={navigateToSession} />
-      </Panel>
-      <Panel title="Skill Invocation Stats" loading={skills.loading} err={skills.err}>
-        <SkillsPanel data={skills.data} />
-      </Panel>
-    </>
+      <div className="subtabs" style={{ display: 'flex', gap: 4, marginBottom: 16 }}>
+        <button className={`sort-btn ${subTab === 'overview' ? 'active' : ''}`}
+                onClick={() => setSubTab('overview')}>Overview</button>
+        <button className={`sort-btn ${subTab === 'outliers' ? 'active' : ''}`}
+                onClick={() => setSubTab('outliers')}>Outliers</button>
+      </div>
+      {subTab === 'overview' ? (
+        <>
+          {/* OVERVIEW: general info, where money went */}
+          <Panel title="Summary" meta={timeRange === 'all' ? 'all time' : `last ${timeRange}`} loading={summary.loading} err={summary.err}>
+            <SummaryBar data={summary.data} />
+          </Panel>
+          <Panel title="Daily Spend by Model" loading={daily.loading} err={daily.err}>
+            <DailySpendChart data={daily.data} />
+          </Panel>
+          <Panel title="Sessions/Week + $/Session" meta="volume vs per-session cost · main sessions only" loading={twoRegime.loading} err={twoRegime.err}>
+            <TwoRegimeChart data={twoRegime.data} />
+          </Panel>
+          <Panel title="Token-type Cost Split" meta="main-chain vs sidechain · derived from model_pricing" loading={tokenStreams.loading} err={tokenStreams.err}>
+            <TokenStreamsPanel data={tokenStreams.data} />
+          </Panel>
+          <Panel title="First-turn Cache-Creation Distribution" meta="system-prompt size proxy" loading={firstTurnCc.loading} err={firstTurnCc.err}>
+            <FirstTurnCcChart data={firstTurnCc.data} />
+          </Panel>
+          <Panel title="Model Breakdown" loading={models.loading} err={models.err}>
+            <ModelBreakdownTable data={models.data} />
+          </Panel>
+          <Panel title="Errors" loading={errors.loading} err={errors.err}>
+            <ErrorSummaryPanel data={errors.data} />
+          </Panel>
+        </>
+      ) : (
+        <>
+          {/* OUTLIERS: actionable, what to change */}
+          <Panel title="Top 1% Most-Expensive Turns" meta="top 30 by cost · click to open session" loading={topTurns.loading} err={topTurns.err}>
+            <TopTurnsTable data={topTurns.data} navigateToSession={navigateToSession} />
+          </Panel>
+          <Panel title="Top Sessions" meta="by cost · click a row to open in Transcripts" loading={top.loading} err={top.err}>
+            <TopSessionsTable data={top.data} projects={projects} navigateToSession={navigateToSession} />
+          </Panel>
+          <Panel title="Context Size Distribution" meta="peak tokens per session · click 200k+ rows to open transcript" loading={ctxSize.loading} err={ctxSize.err}>
+            <ContextSizePanel data={ctxSize.data} navigateToSession={navigateToSession} />
+          </Panel>
+          <Panel title="Cache Invalidation Events" meta="mid-session high-CC turns by gap × type" loading={cacheInval.loading} err={cacheInval.err}>
+            <CacheInvalidationPanel data={cacheInval.data} />
+          </Panel>
+          <Panel title="Compaction Events" loading={compactions.loading} err={compactions.err}>
+            <CompactionsPanel data={compactions.data} />
+          </Panel>
+          <Panel title="Hour-of-Day Cost" loading={hourOfDay.loading} err={hourOfDay.err}>
+            <HourOfDayChart data={hourOfDay.data} />
+          </Panel>
+          <Panel title="Artifact Leaderboard: Large Writes" meta="top 30 by content size" loading={artifactWrites.loading} err={artifactWrites.err}>
+            <ArtifactLeaderboard data={artifactWrites.data} kind="write" navigateToSession={navigateToSession} />
+          </Panel>
+          <Panel title="Artifact Leaderboard: Agent Prompts" meta="top 30 by prompt size" loading={artifactAgents.loading} err={artifactAgents.err}>
+            <ArtifactLeaderboard data={artifactAgents.data} kind="agent" navigateToSession={navigateToSession} />
+          </Panel>
+          <Panel title="Artifact Leaderboard: Tool Results" meta="top 30 by result size" loading={artifactToolResults.loading} err={artifactToolResults.err}>
+            <ArtifactLeaderboard data={artifactToolResults.data} kind="tool_result" navigateToSession={navigateToSession} />
+          </Panel>
+          <Panel title="Top Reads by Size" loading={readSizes.loading} err={readSizes.err}>
+            <ReadSizesPanel data={readSizes.data} navigateToSession={navigateToSession} />
+          </Panel>
+          <Panel title="File Hotspots" meta="top 30 by distinct session reads" loading={files.loading} err={files.err}>
+            <FileHotspotsTable data={files.data} />
+          </Panel>
+          <Panel title="Bash Leaderboards" loading={bash.loading} err={bash.err}>
+            <BashPanel data={bash.data} navigateToSession={navigateToSession} />
+          </Panel>
+          <Panel title="MCP Tool Result Sizes" loading={mcpTools.loading} err={mcpTools.err}>
+            <McpToolsPanel data={mcpTools.data} />
+          </Panel>
+          <Panel title="Hook Frequency & Duration" meta="hook output size not stored in DB" loading={hooks.loading} err={hooks.err}>
+            <HooksPanel data={hooks.data} />
+          </Panel>
+          <Panel title="Skill Invocation Stats" loading={skills.loading} err={skills.err}>
+            <SkillsPanel data={skills.data} />
+          </Panel>
+          <Panel title="Agent Model Usage" loading={agents.loading} err={agents.err}>
+            <AgentModelPanel data={agents.data} />
+          </Panel>
+          <Panel title="Cache Health" loading={cache.loading} err={cache.err}>
+            <CacheHealthPanel data={cache.data} />
+          </Panel>
+          <Panel title="Session Distribution" meta="by turn count" loading={dist.loading} err={dist.err}>
+            <SessionDistributionTable data={dist.data} />
+          </Panel>
+        </>
+      )}
+    </div>
   );
 }
 

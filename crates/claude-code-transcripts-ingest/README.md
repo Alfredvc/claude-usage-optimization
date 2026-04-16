@@ -61,7 +61,34 @@ Browse by project → session → turn-by-turn timeline. Every assistant turn sh
 
 #### Dashboard
 
-Shows total spend, daily cost by model (Opus / Sonnet / Haiku), cache hit rate, agent model inheritance (subagents that silently fell back to Opus), top sessions by cost, file hotspots (files re-read across the most sessions), and error cost premium.
+A multi-panel cost dashboard split into two sub-tabs. Switch between them with the **Overview** and **Outliers** buttons; the active tab is preserved in the URL (`?sub=outliers`) so you can bookmark or share a specific view.
+
+**Overview** — general spend picture:
+- Summary (total cost, token breakdown)
+- Daily Spend by Model
+- Sessions/Week + $/Session (volume vs per-session cost)
+- Token-type Cost Split (main-chain vs sidechain)
+- First-turn Cache-Creation Distribution (system-prompt size proxy)
+- Model Breakdown
+- Errors
+
+**Outliers** — actionable panels for reducing spend:
+- Top 1% Most-Expensive Turns (top 30 by cost, click to open session)
+- Top Sessions (by cost, click to open in Transcripts)
+- Context Size Distribution (peak tokens per session)
+- Cache Invalidation Events
+- Compaction Events
+- Hour-of-Day Cost
+- Artifact Leaderboards: Large Writes / Agent Prompts / Tool Results
+- Top Reads by Size
+- File Hotspots (files re-read across the most sessions)
+- Bash Leaderboards
+- MCP Tool Result Sizes
+- Hook Frequency & Duration
+- Skill Invocation Stats
+- Agent Model Usage
+- Cache Health
+- Session Distribution (by turn count)
 
 ![cct serve dashboard](https://raw.githubusercontent.com/alfredvc/claude-usage-optimization/main/docs/assets/dashboard.png)
 
