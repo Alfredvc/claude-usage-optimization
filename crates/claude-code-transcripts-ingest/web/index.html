@@ -1562,6 +1562,28 @@ function HooksPanel({ data }) {
   );
 }
 
+// ── SkillsPanel ────────────────────────────────────────────────────────────
+function SkillsPanel({ data }) {
+  const rows = data?.rows || [];
+  if (rows.length === 0) return <div className="muted">No skill invocations in range</div>;
+  return (
+    <table className="data-table">
+      <thead><tr>
+        <th>Skill name</th>
+        <th className="num">Invocations</th>
+        <th className="num">Sessions</th>
+      </tr></thead>
+      <tbody>{rows.map((r, i) => (
+        <tr key={i}>
+          <td style={{ fontFamily: 'monospace', fontSize: '0.85em' }}>{r.skill_name || '—'}</td>
+          <td className="num">{fmtNum(r.invocations || 0)}</td>
+          <td className="num">{fmtNum(r.sessions || 0)}</td>
+        </tr>
+      ))}</tbody>
+    </table>
+  );
+}
+
 // ── BashPanel ──────────────────────────────────────────────────────────────
 function BashPanel({ data, navigateToSession }) {
   const longest = data?.longest || [];
@@ -1740,6 +1762,7 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
     mcpTools:            buildUrl('/api/dashboard/mcp-tools', timeRange),
     readSizes:           buildUrl('/api/dashboard/read-sizes', timeRange),
     bash:                buildUrl('/api/dashboard/bash', timeRange),
+    skills:              buildUrl('/api/dashboard/skills', timeRange),
   }), [timeRange]);
   const summary            = usePanel(urls.summary);
   const daily              = usePanel(urls.daily);
@@ -1765,6 +1788,7 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
   const mcpTools            = usePanel(urls.mcpTools);
   const readSizes           = usePanel(urls.readSizes);
   const bash                = usePanel(urls.bash);
+  const skills              = usePanel(urls.skills);
 
   return (
     <>
@@ -1840,6 +1864,9 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
       </Panel>
       <Panel title="Bash Leaderboards" loading={bash.loading} err={bash.err}>
         <BashPanel data={bash.data} navigateToSession={navigateToSession} />
+      </Panel>
+      <Panel title="Skill Invocation Stats" loading={skills.loading} err={skills.err}>
+        <SkillsPanel data={skills.data} />
       </Panel>
     </>
   );

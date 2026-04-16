@@ -2520,6 +2520,50 @@ async fn api_dashboard_hooks(
     }
 }
 
+async fn api_dashboard_skills(
+    State(state): State<AppState>,
+    Query(q): Query<DashboardQ>,
+) -> Response {
+    let (from, to) = time_bounds(&q);
+    let db_path = state.db_path.clone();
+    let result = spawn_blocking(move || -> Result<Value, String> {
+        let conn = open_db(&db_path)?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT \
+                   ais.skill_name, \
+                   COUNT(*) AS invocations, \
+                   COUNT(DISTINCT e.session_id) AS sessions \
+                 FROM attachment_invoked_skills ais \
+                 JOIN entries e ON e.entry_id = ais.entry_id \
+                 WHERE CAST(e.timestamp AS TIMESTAMP) >= CAST(? AS TIMESTAMP) \
+                   AND CAST(e.timestamp AS TIMESTAMP) <  CAST(? AS TIMESTAMP) \
+                 GROUP BY ais.skill_name \
+                 ORDER BY invocations DESC \
+                 LIMIT 100",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows: Vec<Value> = stmt
+            .query_map([&from, &to], |row| {
+                Ok(json!({
+                    "skill_name":  row.get::<_, Option<String>>(0)?,
+                    "invocations": row.get::<_, i64>(1)?,
+                    "sessions":    row.get::<_, i64>(2)?,
+                }))
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(json!({ "rows": rows }))
+    })
+    .await;
+    match result {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => err500(e),
+        Err(e) => err500(e),
+    }
+}
+
 async fn api_dashboard_bash(
     State(state): State<AppState>,
     Query(q): Query<DashboardQ>,
@@ -2762,6 +2806,7 @@ pub async fn run(args: ServeArgs) {
         .route("/api/dashboard/mcp-tools", get(api_dashboard_mcp_tools))
         .route("/api/dashboard/read-sizes", get(api_dashboard_read_sizes))
         .route("/api/dashboard/bash", get(api_dashboard_bash))
+        .route("/api/dashboard/skills", get(api_dashboard_skills))
         .with_state(state);
 
     let addr = format!("127.0.0.1:{port}");
