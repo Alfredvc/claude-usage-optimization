@@ -1441,7 +1441,7 @@ function App() {
     if (activeTab !== 'dashboard') p.set('tab', activeTab); else p.delete('tab');
     if (timeRange !== '30d') p.set('range', timeRange); else p.delete('range');
     if (activeTab === 'transcripts' && selectedProject) p.set('project', selectedProject);
-    else if (activeTab !== 'transcripts') p.delete('project');
+    else p.delete('project');
     // session/sort are managed by TranscriptView — leave them alone here
     const qs = p.toString();
     window.history.replaceState(null, '', qs ? '?' + qs : window.location.pathname);
@@ -1458,10 +1458,6 @@ function App() {
     setSelectedProject(project || '');
     setTranscriptSessionId(sessionId || '');
     setActiveTab('transcripts');
-  }, []);
-
-  const goHome = useCallback(() => {
-    setSelectedProject('');
   }, []);
 
   const TIME_RANGES = ['7d', '30d', '90d', 'all'];
