@@ -1562,6 +1562,59 @@ function HooksPanel({ data }) {
   );
 }
 
+// ── BashPanel ──────────────────────────────────────────────────────────────
+function BashPanel({ data, navigateToSession }) {
+  const longest = data?.longest || [];
+  const mostRepeated = data?.most_repeated || [];
+  if (longest.length === 0 && mostRepeated.length === 0) return <div className="muted">No Bash calls in range</div>;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {longest.length > 0 && (
+        <div>
+          <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 6 }}>Longest Commands</div>
+          <table className="data-table">
+            <thead><tr>
+              <th>Preview</th>
+              <th className="num">Size</th>
+              <th>Session</th>
+              <th>Time</th>
+            </tr></thead>
+            <tbody>{longest.map((r, i) => (
+              <tr key={i} style={{ cursor: navigateToSession ? 'pointer' : undefined }}
+                  onClick={() => navigateToSession && navigateToSession(r.project, r.session_id)}>
+                <td style={{ fontFamily: 'monospace', fontSize: '0.85em', maxWidth: 340, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                    title={r.cmd_preview}>{r.cmd_preview || '—'}</td>
+                <td className="num">{fmtNum(r.cmd_chars || 0)}</td>
+                <td className="link" style={{ fontFamily: 'monospace', fontSize: '0.85em' }}>{(r.session_id || '').slice(0, 8)}</td>
+                <td>{fmtDate(r.ts)}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      )}
+      {mostRepeated.length > 0 && (
+        <div>
+          <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 6 }}>Most Repeated (by first token)</div>
+          <table className="data-table">
+            <thead><tr>
+              <th>Command</th>
+              <th className="num">Calls</th>
+              <th className="num">Avg result chars</th>
+            </tr></thead>
+            <tbody>{mostRepeated.map((r, i) => (
+              <tr key={i}>
+                <td style={{ fontFamily: 'monospace', fontSize: '0.85em' }}>{r.cmd_head || '—'}</td>
+                <td className="num">{fmtNum(r.calls || 0)}</td>
+                <td className="num">{fmtNum(r.avg_result_chars || 0)}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── ReadSizesPanel ─────────────────────────────────────────────────────────
 function ReadSizesPanel({ data, navigateToSession }) {
   const rows = data?.rows || [];
@@ -1686,6 +1739,7 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
     hooks:               buildUrl('/api/dashboard/hooks', timeRange),
     mcpTools:            buildUrl('/api/dashboard/mcp-tools', timeRange),
     readSizes:           buildUrl('/api/dashboard/read-sizes', timeRange),
+    bash:                buildUrl('/api/dashboard/bash', timeRange),
   }), [timeRange]);
   const summary            = usePanel(urls.summary);
   const daily              = usePanel(urls.daily);
@@ -1710,6 +1764,7 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
   const hooks               = usePanel(urls.hooks);
   const mcpTools            = usePanel(urls.mcpTools);
   const readSizes           = usePanel(urls.readSizes);
+  const bash                = usePanel(urls.bash);
 
   return (
     <>
@@ -1782,6 +1837,9 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
       </Panel>
       <Panel title="Top Reads by Size" loading={readSizes.loading} err={readSizes.err}>
         <ReadSizesPanel data={readSizes.data} navigateToSession={navigateToSession} />
+      </Panel>
+      <Panel title="Bash Leaderboards" loading={bash.loading} err={bash.err}>
+        <BashPanel data={bash.data} navigateToSession={navigateToSession} />
       </Panel>
     </>
   );

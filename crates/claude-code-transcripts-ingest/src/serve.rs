@@ -2520,6 +2520,87 @@ async fn api_dashboard_hooks(
     }
 }
 
+async fn api_dashboard_bash(
+    State(state): State<AppState>,
+    Query(q): Query<DashboardQ>,
+) -> Response {
+    let (from, to) = time_bounds(&q);
+    let db_path = state.db_path.clone();
+    let result = spawn_blocking(move || -> Result<Value, String> {
+        let conn = open_db(&db_path)?;
+
+        // Query 1: longest single Bash commands
+        let mut stmt1 = conn
+            .prepare(
+                "SELECT \
+                   e.session_id, \
+                   regexp_extract(e.file_path, '.*/projects/([^/]+)/[^/]+\\.jsonl$', 1) AS project, \
+                   LENGTH(json_extract_string(acb.tool_input, '$.command')) AS cmd_chars, \
+                   SUBSTR(json_extract_string(acb.tool_input, '$.command'), 1, 200) AS cmd_preview, \
+                   e.timestamp::VARCHAR AS ts \
+                 FROM assistant_content_blocks acb \
+                 JOIN entries e ON e.entry_id = acb.entry_id \
+                 WHERE acb.tool_name = 'Bash' \
+                   AND CAST(e.timestamp AS TIMESTAMP) >= CAST(? AS TIMESTAMP) \
+                   AND CAST(e.timestamp AS TIMESTAMP) <  CAST(? AS TIMESTAMP) \
+                 ORDER BY cmd_chars DESC NULLS LAST \
+                 LIMIT 20",
+            )
+            .map_err(|e| e.to_string())?;
+        let longest: Vec<Value> = stmt1
+            .query_map([&from, &to], |row| {
+                Ok(json!({
+                    "session_id":  row.get::<_, Option<String>>(0)?,
+                    "project":     row.get::<_, Option<String>>(1)?,
+                    "cmd_chars":   row.get::<_, Option<i64>>(2)?,
+                    "cmd_preview": row.get::<_, Option<String>>(3)?,
+                    "ts":          row.get::<_, Option<String>>(4)?,
+                }))
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        // Query 2: most-repeated by first token
+        let mut stmt2 = conn
+            .prepare(
+                "SELECT \
+                   split_part(json_extract_string(acb.tool_input, '$.command'), ' ', 1) AS cmd_head, \
+                   COUNT(*) AS calls, \
+                   ROUND(AVG(LENGTH(CAST(ucb.tool_result_content AS VARCHAR))), 0) AS avg_result_chars \
+                 FROM assistant_content_blocks acb \
+                 LEFT JOIN user_content_blocks ucb ON ucb.tool_use_id = acb.tool_use_id \
+                 JOIN entries e ON e.entry_id = acb.entry_id \
+                 WHERE acb.tool_name = 'Bash' \
+                   AND CAST(e.timestamp AS TIMESTAMP) >= CAST(? AS TIMESTAMP) \
+                   AND CAST(e.timestamp AS TIMESTAMP) <  CAST(? AS TIMESTAMP) \
+                 GROUP BY cmd_head \
+                 ORDER BY calls DESC \
+                 LIMIT 20",
+            )
+            .map_err(|e| e.to_string())?;
+        let most_repeated: Vec<Value> = stmt2
+            .query_map([&from, &to], |row| {
+                Ok(json!({
+                    "cmd_head":        row.get::<_, Option<String>>(0)?,
+                    "calls":           row.get::<_, i64>(1)?,
+                    "avg_result_chars":row.get::<_, f64>(2)?,
+                }))
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(json!({ "longest": longest, "most_repeated": most_repeated }))
+    })
+    .await;
+    match result {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => err500(e),
+        Err(e) => err500(e),
+    }
+}
+
 async fn api_dashboard_read_sizes(
     State(state): State<AppState>,
     Query(q): Query<DashboardQ>,
@@ -2680,6 +2761,7 @@ pub async fn run(args: ServeArgs) {
         .route("/api/dashboard/hooks", get(api_dashboard_hooks))
         .route("/api/dashboard/mcp-tools", get(api_dashboard_mcp_tools))
         .route("/api/dashboard/read-sizes", get(api_dashboard_read_sizes))
+        .route("/api/dashboard/bash", get(api_dashboard_bash))
         .with_state(state);
 
     let addr = format!("127.0.0.1:{port}");
