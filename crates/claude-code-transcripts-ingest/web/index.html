@@ -1803,7 +1803,7 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
   }, [subTab]);
 
   return (
-    <div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <BaselineBar url={urls.baseline} />
       <div className="subtabs" style={{ display: 'flex', gap: 4, marginBottom: 16 }}>
         <button className={`sort-btn ${subTab === 'overview' ? 'active' : ''}`}
