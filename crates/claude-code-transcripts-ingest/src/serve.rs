@@ -1653,6 +1653,110 @@ async fn api_dashboard_baseline(
     }
 }
 
+async fn api_dashboard_token_streams(
+    State(state): State<AppState>,
+    Query(q): Query<DashboardQ>,
+) -> Response {
+    let (from, to) = time_bounds(&q);
+    let db_path = state.db_path.clone();
+    let result = spawn_blocking(move || -> Result<Value, String> {
+        let conn = open_db(&db_path)?;
+
+        let sql = "
+WITH latest_pricing AS (
+  SELECT model, input_per_mtok, output_per_mtok,
+         cache_creation_5m_per_mtok, cache_creation_1h_per_mtok, cache_read_per_mtok
+  FROM (
+    SELECT *, ROW_NUMBER() OVER (PARTITION BY model ORDER BY effective_date DESC) AS rn
+    FROM model_pricing
+  ) WHERE rn = 1
+),
+rows AS (
+  SELECT
+    e.is_sidechain,
+    d.input_tokens,
+    d.output_tokens,
+    d.cache_read_input_tokens,
+    COALESCE(d.cache_creation_5m, 0) AS cc5m,
+    COALESCE(d.cache_creation_1h, 0) AS cc1h,
+    CASE WHEN COALESCE(d.cache_creation_5m, 0) + COALESCE(d.cache_creation_1h, 0) = 0
+         THEN COALESCE(d.cache_creation_input_tokens, 0)
+         ELSE 0 END AS cc_legacy,
+    p.input_per_mtok, p.output_per_mtok,
+    p.cache_creation_5m_per_mtok, p.cache_creation_1h_per_mtok, p.cache_read_per_mtok,
+    d.cost_usd
+  FROM entries e
+  JOIN assistant_entries_deduped d
+    ON d.entry_id = e.entry_id AND d.message_id IS NOT NULL
+  LEFT JOIN latest_pricing p ON p.model = d.model
+  WHERE CAST(e.timestamp AS TIMESTAMP) >= CAST(? AS TIMESTAMP)
+    AND CAST(e.timestamp AS TIMESTAMP) <  CAST(? AS TIMESTAMP)
+)
+SELECT
+  is_sidechain,
+  ROUND(SUM(COALESCE(input_tokens, 0)             * COALESCE(input_per_mtok, 0))              / 1e6, 4) AS cost_input,
+  ROUND(SUM(COALESCE(output_tokens, 0)            * COALESCE(output_per_mtok, 0))             / 1e6, 4) AS cost_output,
+  ROUND(SUM(COALESCE(cache_read_input_tokens, 0)  * COALESCE(cache_read_per_mtok, 0))         / 1e6, 4) AS cost_cache_read,
+  ROUND(SUM((cc5m + cc_legacy)                    * COALESCE(cache_creation_5m_per_mtok, 0))  / 1e6, 4) AS cost_cc5m,
+  ROUND(SUM(cc1h                                  * COALESCE(cache_creation_1h_per_mtok, 0))  / 1e6, 4) AS cost_cc1h,
+  ROUND(SUM(cost_usd), 4) AS cost_usd_actual
+FROM rows
+GROUP BY is_sidechain";
+
+        let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+        let rows = stmt.query_map([&from, &to], |row| {
+            Ok((
+                row.get::<_, Option<bool>>(0)?,   // is_sidechain
+                row.get::<_, f64>(1)?,             // cost_input
+                row.get::<_, f64>(2)?,             // cost_output
+                row.get::<_, f64>(3)?,             // cost_cache_read
+                row.get::<_, f64>(4)?,             // cost_cc5m
+                row.get::<_, f64>(5)?,             // cost_cc1h
+                row.get::<_, f64>(6)?,             // cost_usd_actual
+            ))
+        }).map_err(|e| e.to_string())?;
+
+        let mut main_row = None;
+        let mut side_row = None;
+        let mut total_derived = 0.0_f64;
+        let mut total_actual  = 0.0_f64;
+
+        for r in rows.filter_map(|r| r.ok()) {
+            let (is_sidechain, ci, co, cr, cc5m, cc1h, actual) = r;
+            let total = ci + co + cr + cc5m + cc1h;
+            total_derived += total;
+            total_actual  += actual;
+            let obj = json!({
+                "input":       ci,
+                "output":      co,
+                "cache_read":  cr,
+                "cc5m":        cc5m,
+                "cc1h":        cc1h,
+                "total":       (total * 10000.0).round() / 10000.0,
+            });
+            if is_sidechain.unwrap_or(false) {
+                side_row = Some(obj);
+            } else {
+                main_row = Some(obj);
+            }
+        }
+
+        let delta = total_derived - total_actual;
+        Ok(json!({
+            "streams": {
+                "main":      main_row.unwrap_or(json!({"input":0,"output":0,"cache_read":0,"cc5m":0,"cc1h":0,"total":0})),
+                "sidechain": side_row.unwrap_or(json!({"input":0,"output":0,"cache_read":0,"cc5m":0,"cc1h":0,"total":0})),
+            },
+            "reconciliation_delta": (delta * 10000.0).round() / 10000.0,
+        }))
+    }).await;
+    match result {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => err500(e),
+        Err(e) => err500(e),
+    }
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 pub async fn run(args: ServeArgs) {
@@ -1688,6 +1792,10 @@ pub async fn run(args: ServeArgs) {
         )
         .route("/api/dashboard/errors", get(api_dashboard_errors))
         .route("/api/dashboard/baseline", get(api_dashboard_baseline))
+        .route(
+            "/api/dashboard/token-streams",
+            get(api_dashboard_token_streams),
+        )
         .with_state(state);
 
     let addr = format!("127.0.0.1:{port}");

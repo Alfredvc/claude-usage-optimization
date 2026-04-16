@@ -1233,29 +1233,89 @@ function BaselineBar({ url }) {
   );
 }
 
+// ── TokenStreamsPanel ──────────────────────────────────────────────────────
+function TokenStreamsPanel({ data }) {
+  if (!BarChart) return <div className="panel-error">Recharts not loaded</div>;
+  if (!data) return <div className="panel-loading">No data</div>;
+
+  const { streams, reconciliation_delta } = data;
+
+  const chartData = [
+    {
+      name: 'Main-chain',
+      input:      (streams.main?.input      || 0),
+      cc5m:       (streams.main?.cc5m       || 0),
+      cc1h:       (streams.main?.cc1h       || 0),
+      cache_read: (streams.main?.cache_read || 0),
+      output:     (streams.main?.output     || 0),
+    },
+    {
+      name: 'Sidechain',
+      input:      (streams.sidechain?.input      || 0),
+      cc5m:       (streams.sidechain?.cc5m       || 0),
+      cc1h:       (streams.sidechain?.cc1h       || 0),
+      cache_read: (streams.sidechain?.cache_read || 0),
+      output:     (streams.sidechain?.output     || 0),
+    },
+  ];
+
+  const fmtDollar = v => `$${v.toFixed(4)}`;
+  const deltaAbs = Math.abs(reconciliation_delta || 0);
+  const total = (streams.main?.total || 0) + (streams.sidechain?.total || 0);
+  const deltaWarning = total > 0 && deltaAbs / total > 0.01;
+
+  return (
+    <div>
+      <div style={{ width: '100%', height: 140 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={chartData} layout="vertical" margin={{ left: 80, right: 20, top: 4, bottom: 4 }}>
+            <XAxis type="number" tickFormatter={v => `$${v.toFixed(2)}`} stroke="#8b949e" tick={{ fontSize: 10 }} />
+            <YAxis type="category" dataKey="name" width={80} stroke="#8b949e" tick={{ fontSize: 10 }} />
+            <Tooltip
+              contentStyle={{ background: '#1c2128', border: '1px solid #30363d', fontSize: 11 }}
+              formatter={fmtDollar}
+            />
+            <Legend wrapperStyle={{ fontSize: 11 }} />
+            <Bar dataKey="input"      stackId="a" fill="#6baed6" name="input" />
+            <Bar dataKey="cc5m"       stackId="a" fill="#fbbf24" name="cc5m" />
+            <Bar dataKey="cc1h"       stackId="a" fill="#f97316" name="cc1h" />
+            <Bar dataKey="cache_read" stackId="a" fill="#4ade80" name="cache read" />
+            <Bar dataKey="output"     stackId="a" fill="#a78bfa" name="output" />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+      <div className="muted" style={{ fontSize: '0.8em', marginTop: 4, color: deltaWarning ? 'var(--err, #e53e3e)' : undefined }}>
+        Reconciliation delta: {reconciliation_delta >= 0 ? '+' : ''}{(reconciliation_delta || 0).toFixed(4)} (pricing derived from latest model_pricing row)
+      </div>
+    </div>
+  );
+}
+
 // ── GlobalDashboard ────────────────────────────────────────────────────────
 function GlobalDashboard({ timeRange, projects, navigateToSession }) {
   const urls = useMemo(() => ({
-    baseline: buildUrl('/api/dashboard/baseline', timeRange),
-    summary: buildUrl('/api/dashboard/summary', timeRange),
-    daily:   buildUrl('/api/dashboard/daily', timeRange),
-    models:  buildUrl('/api/dashboard/models', timeRange),
-    cache:   buildUrl('/api/dashboard/cache', timeRange),
-    agents:  buildUrl('/api/dashboard/agents', timeRange),
-    top:     buildUrl('/api/dashboard/top-sessions', timeRange),
-    dist:    buildUrl('/api/dashboard/session-distribution', timeRange),
-    files:   buildUrl('/api/dashboard/file-hotspots', timeRange),
-    errors:  buildUrl('/api/dashboard/errors', timeRange),
+    baseline:     buildUrl('/api/dashboard/baseline', timeRange),
+    summary:      buildUrl('/api/dashboard/summary', timeRange),
+    daily:        buildUrl('/api/dashboard/daily', timeRange),
+    models:       buildUrl('/api/dashboard/models', timeRange),
+    cache:        buildUrl('/api/dashboard/cache', timeRange),
+    agents:       buildUrl('/api/dashboard/agents', timeRange),
+    top:          buildUrl('/api/dashboard/top-sessions', timeRange),
+    dist:         buildUrl('/api/dashboard/session-distribution', timeRange),
+    files:        buildUrl('/api/dashboard/file-hotspots', timeRange),
+    errors:       buildUrl('/api/dashboard/errors', timeRange),
+    tokenStreams: buildUrl('/api/dashboard/token-streams', timeRange),
   }), [timeRange]);
-  const summary = usePanel(urls.summary);
-  const daily   = usePanel(urls.daily);
-  const models  = usePanel(urls.models);
-  const cache   = usePanel(urls.cache);
-  const agents  = usePanel(urls.agents);
-  const top     = usePanel(urls.top);
-  const dist    = usePanel(urls.dist);
-  const files   = usePanel(urls.files);
-  const errors  = usePanel(urls.errors);
+  const summary      = usePanel(urls.summary);
+  const daily        = usePanel(urls.daily);
+  const models       = usePanel(urls.models);
+  const cache        = usePanel(urls.cache);
+  const agents       = usePanel(urls.agents);
+  const top          = usePanel(urls.top);
+  const dist         = usePanel(urls.dist);
+  const files        = usePanel(urls.files);
+  const errors       = usePanel(urls.errors);
+  const tokenStreams  = usePanel(urls.tokenStreams);
 
   return (
     <>
@@ -1265,6 +1325,9 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
       </Panel>
       <Panel title="Daily Spend by Model" loading={daily.loading} err={daily.err}>
         <DailySpendChart data={daily.data} />
+      </Panel>
+      <Panel title="Token-type Cost Split" meta="main-chain vs sidechain · derived from model_pricing" loading={tokenStreams.loading} err={tokenStreams.err}>
+        <TokenStreamsPanel data={tokenStreams.data} />
       </Panel>
       <Panel title="Model Breakdown" loading={models.loading} err={models.err}>
         <ModelBreakdownTable data={models.data} />
