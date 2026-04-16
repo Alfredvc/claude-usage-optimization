@@ -2151,6 +2151,74 @@ async fn api_dashboard_two_regime(
     }
 }
 
+async fn api_dashboard_first_turn_cc(
+    State(state): State<AppState>,
+    Query(q): Query<DashboardQ>,
+) -> Response {
+    let (from, to) = time_bounds(&q);
+    let db_path = state.db_path.clone();
+    let result = spawn_blocking(move || -> Result<Value, String> {
+        let conn = open_db(&db_path)?;
+        let mut stmt = conn
+            .prepare(
+                "WITH first_turns AS (
+                   SELECT
+                     t.session_id,
+                     t.is_subagent,
+                     FIRST_VALUE(
+                       COALESCE(d.cache_creation_5m,0) + COALESCE(d.cache_creation_1h,0)
+                       + CASE WHEN COALESCE(d.cache_creation_5m,0)+COALESCE(d.cache_creation_1h,0)=0
+                              THEN COALESCE(d.cache_creation_input_tokens,0) ELSE 0 END
+                     ) OVER (PARTITION BY t.session_id ORDER BY e.timestamp) AS first_cc,
+                     ROW_NUMBER() OVER (PARTITION BY t.session_id ORDER BY e.timestamp) AS rn
+                   FROM entries e
+                   JOIN transcripts t ON t.file_path = e.file_path
+                   JOIN assistant_entries_deduped d
+                     ON d.entry_id = e.entry_id AND d.message_id IS NOT NULL
+                   WHERE CAST(e.timestamp AS TIMESTAMP) >= CAST(? AS TIMESTAMP)
+                     AND CAST(e.timestamp AS TIMESTAMP) <  CAST(? AS TIMESTAMP)
+                 )
+                 SELECT
+                   CASE
+                     WHEN first_cc < 10000  THEN '<10k'
+                     WHEN first_cc < 25000  THEN '10-25k'
+                     WHEN first_cc < 50000  THEN '25-50k'
+                     WHEN first_cc < 100000 THEN '50-100k'
+                     ELSE '100k+'
+                   END AS bucket,
+                   COUNT(*) FILTER (WHERE NOT is_subagent) AS main_sessions,
+                   COUNT(*) FILTER (WHERE is_subagent)     AS subagent_sessions,
+                   ROUND(AVG(first_cc), 0)                 AS avg_cc
+                 FROM first_turns
+                 WHERE rn = 1
+                 GROUP BY bucket
+                 ORDER BY CASE bucket
+                   WHEN '<10k' THEN 1 WHEN '10-25k' THEN 2 WHEN '25-50k' THEN 3
+                   WHEN '50-100k' THEN 4 ELSE 5 END",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows: Vec<Value> = stmt
+            .query_map([&from, &to], |row| {
+                Ok(json!({
+                    "bucket":            row.get::<_, String>(0)?,
+                    "main_sessions":     row.get::<_, i64>(1)?,
+                    "subagent_sessions": row.get::<_, i64>(2)?,
+                    "avg_cc":            row.get::<_, f64>(3)?,
+                }))
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(Value::Array(rows))
+    })
+    .await;
+    match result {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => err500(e),
+        Err(e) => err500(e),
+    }
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 pub async fn run(args: ServeArgs) {
@@ -2197,6 +2265,10 @@ pub async fn run(args: ServeArgs) {
         )
         .route("/api/dashboard/top-turns", get(api_dashboard_top_turns))
         .route("/api/dashboard/two-regime", get(api_dashboard_two_regime))
+        .route(
+            "/api/dashboard/first-turn-cc",
+            get(api_dashboard_first_turn_cc),
+        )
         .with_state(state);
 
     let addr = format!("127.0.0.1:{port}");

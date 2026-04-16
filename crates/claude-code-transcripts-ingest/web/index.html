@@ -962,6 +962,35 @@ function TwoRegimeChart({ data }) {
   );
 }
 
+// ── FirstTurnCcChart ────────────────────────────────────────────────────────
+function FirstTurnCcChart({ data }) {
+  if (!data || data.length === 0) return <div className="panel-loading">No data</div>;
+  const { BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer } = window.Recharts || {};
+  if (!BarChart) return <div className="panel-error">Recharts not loaded</div>;
+  const chartData = data.map(d => ({
+    bucket: d.bucket,
+    main: d.main_sessions || 0,
+    subagent: d.subagent_sessions || 0,
+  }));
+  return (
+    <div style={{ width: '100%', height: 200 }}>
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart data={chartData} margin={{ top: 6, right: 10, left: 0, bottom: 4 }}>
+          <XAxis dataKey="bucket" stroke="#8b949e" tick={{ fontSize: 10 }} />
+          <YAxis stroke="#8b949e" tick={{ fontSize: 10 }} />
+          <Tooltip
+            contentStyle={{ background: '#1c2128', border: '1px solid #30363d', fontSize: 11 }}
+            formatter={(v, n) => [v, n]}
+          />
+          <Legend wrapperStyle={{ fontSize: 11 }} />
+          <Bar dataKey="main" name="main sessions" fill="#3b82f6" />
+          <Bar dataKey="subagent" name="subagent sessions" fill="#a855f7" />
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
 // ── ModelBreakdownTable ────────────────────────────────────────────────────
 function ModelBreakdownTable({ data }) {
   if (!data || data.length === 0) return <div className="panel-loading">No data</div>;
@@ -1483,6 +1512,7 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
     ctxSize:             buildUrl('/api/dashboard/context-size', timeRange),
     topTurns:            buildUrl('/api/dashboard/top-turns', timeRange),
     twoRegime:           buildUrl('/api/dashboard/two-regime', timeRange),
+    firstTurnCc:         buildUrl('/api/dashboard/first-turn-cc', timeRange),
   }), [timeRange]);
   const summary            = usePanel(urls.summary);
   const daily              = usePanel(urls.daily);
@@ -1500,6 +1530,7 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
   const ctxSize             = usePanel(urls.ctxSize);
   const topTurns            = usePanel(urls.topTurns);
   const twoRegime           = usePanel(urls.twoRegime);
+  const firstTurnCc         = usePanel(urls.firstTurnCc);
 
   return (
     <>
@@ -1512,6 +1543,9 @@ function GlobalDashboard({ timeRange, projects, navigateToSession }) {
       </Panel>
       <Panel title="Sessions/Week + $/Session" meta="volume vs per-session cost · main sessions only" loading={twoRegime.loading} err={twoRegime.err}>
         <TwoRegimeChart data={twoRegime.data} />
+      </Panel>
+      <Panel title="First-turn Cache-Creation Distribution" meta="system-prompt size proxy" loading={firstTurnCc.loading} err={firstTurnCc.err}>
+        <FirstTurnCcChart data={firstTurnCc.data} />
       </Panel>
       <Panel title="Token-type Cost Split" meta="main-chain vs sidechain · derived from model_pricing" loading={tokenStreams.loading} err={tokenStreams.err}>
         <TokenStreamsPanel data={tokenStreams.data} />
