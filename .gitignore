@@ -6,3 +6,7 @@
 *.parquet
 .DS_Store
 out/
+.agents/
+.playwright-cli/
+scripts/
+skills-lock.json
