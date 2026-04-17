@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.5] - 2026-04-17
+
+### 🐛 Bug Fixes
+
+- *(ci)* Pin toolchain to 1.95.0 and fix unnecessary_sort_by lint
+- *(build)* Route all npm writes through OUT_DIR to fix cargo publish
+
 ## [0.1.4] - 2026-04-17
 
 ### 🚀 Features
@@ -22,6 +29,10 @@ All notable changes to this project will be documented in this file.
 
 - *(serve)* Precompute session summary + LRU transcript cache
 - *(ingest)* Materialize assistant_entries_deduped as table
+
+### ⚙️ Miscellaneous Tasks
+
+- Release v0.1.4
 
 ## [0.1.3] - 2026-04-17
 
