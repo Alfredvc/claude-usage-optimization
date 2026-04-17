@@ -16,11 +16,12 @@ pub struct PriceRow {
 
 /// Seed pricing — USD per 1M tokens.
 ///
-/// NOTE: numbers must be verified against the Anthropic pricing page
-/// before relying on cost figures in production. Convention used:
+/// Verified against https://claude.com/pricing and
+/// https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+/// on 2026-04-17. Cache multipliers (consistent across all current models):
 /// cache_5m = 1.25× input, cache_1h = 2× input, cache_read = 0.10× input.
 pub fn seed_rows() -> Vec<PriceRow> {
-    let date = "2026-04-15".to_string();
+    let date = "2026-04-17".to_string();
     let mk = |model: &str, input: f64, output: f64| PriceRow {
         model: model.to_string(),
         input_per_mtok: input,
@@ -31,8 +32,10 @@ pub fn seed_rows() -> Vec<PriceRow> {
         effective_date: date.clone(),
     };
     vec![
-        mk("claude-opus-4-6", 15.00, 75.00),
+        mk("claude-opus-4-7", 5.00, 25.00),
+        mk("claude-opus-4-6", 5.00, 25.00),
         mk("claude-sonnet-4-6", 3.00, 15.00),
+        mk("claude-sonnet-4-5", 3.00, 15.00),
         mk("claude-haiku-4-5", 1.00, 5.00),
         mk("claude-3-5-sonnet-20241022", 3.00, 15.00),
         mk("claude-3-5-haiku-20241022", 0.80, 4.00),
