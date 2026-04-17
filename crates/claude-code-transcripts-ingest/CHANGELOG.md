@@ -9,6 +9,10 @@ All notable changes to this project will be documented in this file.
 - *(ci)* Pin toolchain to 1.95.0 and fix unnecessary_sort_by lint
 - *(build)* Route all npm writes through OUT_DIR to fix cargo publish
 
+### ⚙️ Miscellaneous Tasks
+
+- Release v0.1.5
+
 ## [0.1.4] - 2026-04-17
 
 ### 🚀 Features
