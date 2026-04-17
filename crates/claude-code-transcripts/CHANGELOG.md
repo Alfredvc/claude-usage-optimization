@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.4] - 2026-04-17
+
+### 🚀 Features
+
+- *(ingest)* Recognize nested_memory attachment variant
+
+## [0.1.3] - 2026-04-17
+
+### ⚙️ Miscellaneous Tasks
+
+- Release v0.1.3
+
 ## [0.1.2] - 2026-04-16
 
 ### 🐛 Bug Fixes

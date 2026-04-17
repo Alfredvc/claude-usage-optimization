@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.4] - 2026-04-17
+
+### 🚀 Features
+
+- *(web)* Vite + React migration with session-first transcripts UX
+- *(session)* Transcripts → sessions rename + rich filter/sort panel
+- *(ingest)* Recognize nested_memory attachment variant
+
+### 💼 Other
+
+- *(web)* Compact filter bar, sort beside summary, consistent subheaders
+
+### 📚 Documentation
+
+- Refresh viewer screenshots, add sessions-list panel
+
+### ⚡ Performance
+
+- *(serve)* Precompute session summary + LRU transcript cache
+- *(ingest)* Materialize assistant_entries_deduped as table
+
 ## [0.1.3] - 2026-04-17
 
 ### 🚀 Features
@@ -11,6 +32,10 @@ All notable changes to this project will be documented in this file.
 ### 🐛 Bug Fixes
 
 - *(pricing)* Correct opus-4-6 rate, add opus-4-7 and sonnet-4-5
+
+### ⚙️ Miscellaneous Tasks
+
+- Release v0.1.3
 
 ## [0.1.2] - 2026-04-16
 
