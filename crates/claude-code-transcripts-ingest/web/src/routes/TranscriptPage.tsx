@@ -118,7 +118,7 @@ export function TranscriptPage() {
 
   return (
     <>
-      <div className="header" style={{ borderTop: "1px solid var(--border)" }}>
+      <div className="header subheader">
         <button
           className="btn"
           onClick={() => navigate(-1)}

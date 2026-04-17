@@ -183,53 +183,6 @@ export function SessionListPage() {
 
       <div className="sl-filterbar">
         <div className="sl-row">
-          <label>Sort</label>
-          <select
-            value={filter.sort}
-            onChange={(e) =>
-              updateFilter({ ...filter, sort: e.target.value as SortField })
-            }
-          >
-            {SORT_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
-          <div className="sort-group">
-            {(["desc", "asc"] as SortOrder[]).map((o) => (
-              <button
-                key={o}
-                className={`sort-btn ${filter.order === o ? "active" : ""}`}
-                onClick={() => updateFilter({ ...filter, order: o })}
-              >
-                {o === "desc" ? "↓" : "↑"}
-              </button>
-            ))}
-          </div>
-
-          <span className="sep">·</span>
-          <label>Subagents</label>
-          <div className="sort-group">
-            {(["any", "yes", "no"] as SubagentFilter[]).map((v) => (
-              <button
-                key={v}
-                className={`sort-btn ${filter.subagents === v ? "active" : ""}`}
-                onClick={() => updateFilter({ ...filter, subagents: v })}
-              >
-                {v}
-              </button>
-            ))}
-          </div>
-
-          {hasAnyFilter && (
-            <button className="btn" onClick={clearAll} style={{ marginLeft: "auto" }}>
-              Clear filters
-            </button>
-          )}
-        </div>
-
-        <div className="sl-row">
           <label>Range</label>
           <input
             type="datetime-local"
@@ -243,7 +196,7 @@ export function SessionListPage() {
             min={isoToLocal(dataStart)}
             max={isoToLocal(dataEnd)}
           />
-          <span style={{ color: "var(--muted)" }}>→</span>
+          <span className="sl-arrow">→</span>
           <input
             type="datetime-local"
             value={isoToLocal(filter.tEnd ?? dataEnd)}
@@ -264,18 +217,33 @@ export function SessionListPage() {
               reset
             </button>
           )}
-          <span
-            style={{
-              color: "var(--muted)",
-              fontSize: 11,
-              fontFamily: "JetBrains Mono, monospace",
-            }}
-          >
+          <span className="sl-data-range">
             data: {fmtDate(dataStart)} — {fmtDate(dataEnd)}
           </span>
+
+          <span className="sl-spacer" />
+
+          <label>Subagents</label>
+          <div className="sort-group">
+            {(["any", "yes", "no"] as SubagentFilter[]).map((v) => (
+              <button
+                key={v}
+                className={`sort-btn ${filter.subagents === v ? "active" : ""}`}
+                onClick={() => updateFilter({ ...filter, subagents: v })}
+              >
+                {v}
+              </button>
+            ))}
+          </div>
+
+          {hasAnyFilter && (
+            <button className="btn sl-clear" onClick={clearAll}>
+              Clear filters
+            </button>
+          )}
         </div>
 
-        <div className="sl-row">
+        <div className="sl-row sl-row-pickers">
           <MultiSelectPicker
             label="Projects"
             options={projectOptions}
@@ -283,9 +251,6 @@ export function SessionListPage() {
             onChange={(projects) => updateFilter({ ...filter, projects })}
             placeholder="Search projects…"
           />
-        </div>
-
-        <div className="sl-row">
           <MultiSelectPicker
             label="Tools"
             options={toolOptions}
@@ -297,28 +262,57 @@ export function SessionListPage() {
         </div>
       </div>
 
-      <div className="tl-summary">
-        <strong>{visibleSessions.length}</strong>
-        <span>sessions</span>
-        <span className="sep">·</span>
-        <span className="v-cost">{fmtCost(totalCost)}</span>
-        <span className="sep">·</span>
-        <span>{fmtTok(totalTokens)} tok</span>
-        {(filter.tStart || filter.tEnd) && (
-          <>
-            <span className="sep">·</span>
-            <span>
-              {fmtDate(filter.tStart ?? dataStart)} — {fmtDate(filter.tEnd ?? dataEnd)}
-            </span>
-          </>
-        )}
-        {loading && (
-          <>
-            <span className="sep">·</span>
-            <span>loading…</span>
-          </>
-        )}
-        {err && <span className="err" style={{ marginLeft: 8 }}>{err}</span>}
+      <div className="sl-summary">
+        <div className="sl-summary-stats">
+          <strong>{visibleSessions.length}</strong>
+          <span>sessions</span>
+          <span className="sep">·</span>
+          <span className="v-cost">{fmtCost(totalCost)}</span>
+          <span className="sep">·</span>
+          <span>{fmtTok(totalTokens)} tok</span>
+          {(filter.tStart || filter.tEnd) && (
+            <>
+              <span className="sep">·</span>
+              <span>
+                {fmtDate(filter.tStart ?? dataStart)} — {fmtDate(filter.tEnd ?? dataEnd)}
+              </span>
+            </>
+          )}
+          {loading && (
+            <>
+              <span className="sep">·</span>
+              <span>loading…</span>
+            </>
+          )}
+          {err && <span className="err">{err}</span>}
+        </div>
+        <div className="sl-summary-sort">
+          <label>Sort</label>
+          <select
+            value={filter.sort}
+            onChange={(e) =>
+              updateFilter({ ...filter, sort: e.target.value as SortField })
+            }
+          >
+            {SORT_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          <div className="sort-group">
+            {(["desc", "asc"] as SortOrder[]).map((o) => (
+              <button
+                key={o}
+                className={`sort-btn ${filter.order === o ? "active" : ""}`}
+                onClick={() => updateFilter({ ...filter, order: o })}
+                title={o === "desc" ? "Descending" : "Ascending"}
+              >
+                {o === "desc" ? "↓" : "↑"}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
       <div className="sl-list">

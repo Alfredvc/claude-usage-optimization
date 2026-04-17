@@ -39,8 +39,8 @@ export function DashboardPage() {
 
   return (
     <>
-      <div className="header" style={{ borderTop: "1px solid var(--border)" }}>
-        <span className="sep">Range</span>
+      <div className="header subheader">
+        <label>Range</label>
         <div className="sort-group">
           {RANGES.map((r) => (
             <button

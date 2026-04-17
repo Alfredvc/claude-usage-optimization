@@ -19,7 +19,6 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  flex-wrap: wrap;
 }
 
 .sl-row label {
@@ -37,6 +36,36 @@
   padding: 6px 10px;
   font-size: 13px;
   font-family: inherit;
+}
+
+.sl-arrow {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.sl-data-range {
+  color: var(--muted);
+  font-size: 11px;
+  font-family: "JetBrains Mono", monospace;
+  white-space: nowrap;
+}
+
+.sl-spacer {
+  flex: 1;
+}
+
+.sl-clear {
+  margin-left: 4px;
+}
+
+.sl-row-pickers {
+  gap: 16px;
+}
+
+.sl-row-pickers .msp {
+  flex: 0 1 420px;
+  min-width: 240px;
+  max-width: 520px;
 }
 
 .sl-pill {
@@ -83,12 +112,65 @@
 }
 
 .sl-summary {
+  display: flex;
+  align-items: center;
+  gap: 16px;
   padding: 6px 16px;
   color: var(--muted);
   font-size: 12px;
   background: var(--surface2);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  font-family: "JetBrains Mono", monospace;
+}
+
+.sl-summary-stats {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.sl-summary-stats strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.sl-summary-stats .v-cost {
+  color: #7ee787;
+}
+
+.sl-summary-stats .sep {
+  color: var(--border);
+}
+
+.sl-summary-stats .err {
+  margin-left: 8px;
+}
+
+.sl-summary-sort {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.sl-summary-sort label {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.sl-summary-sort select {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px 8px;
+  font-size: 12px;
+  font-family: inherit;
 }
 
 .sl-list {

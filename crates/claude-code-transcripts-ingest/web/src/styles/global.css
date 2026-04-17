@@ -23,6 +23,7 @@ body { background: var(--bg); color: var(--text); font-family: 'Inter', -apple-s
   padding: 10px 16px; background: var(--surface); border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
+.subheader { padding: 8px 16px; background: var(--surface2); }
 .header label { color: var(--muted); font-size: 12px; white-space: nowrap; }
 .header select {
   background: var(--surface2); color: var(--text); border: 1px solid var(--border);
@@ -263,17 +264,17 @@ body { background: var(--bg); color: var(--text); font-family: 'Inter', -apple-s
 .baseline-bar {
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 10px 16px;
-  background: var(--surface, #f5f5f5);
-  border: 1px solid var(--border, #e0e0e0);
-  border-radius: 6px;
-  margin-bottom: 16px;
-  font-size: 0.9em;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 12px;
   flex-wrap: wrap;
 }
-.baseline-bar .dot { color: var(--muted, #888); }
-.baseline-bar .muted { color: var(--muted, #888); }
+.baseline-bar .dot { color: var(--border); }
+.baseline-bar .muted { color: var(--muted); }
+.subtabs { align-self: flex-start; }
 
 /* ── Breadcrumb ── */
 .breadcrumb { font-size: 12px; color: var(--muted); }
