@@ -482,7 +482,7 @@ fn compute_summary(conn: &Connection) -> Result<SessionSummary, String> {
         .into_iter()
         .map(|(k, (c, m))| (k, c, m))
         .collect();
-    proj_vec.sort_by(|a, b| b.2.cmp(&a.2));
+    proj_vec.sort_by_key(|b| std::cmp::Reverse(b.2));
     let projects: Vec<ProjectRowCache> = proj_vec
         .into_iter()
         .map(|(k, c, _)| ProjectRowCache {
