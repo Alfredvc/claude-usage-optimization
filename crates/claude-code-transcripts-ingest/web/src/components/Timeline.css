@@ -1,0 +1,40 @@
+.tl-root {
+  width: 100%;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.tl-empty {
+  padding: 20px 16px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.tl-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--muted);
+  font-family: "JetBrains Mono", monospace;
+  flex-wrap: wrap;
+}
+
+.tl-summary strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.tl-summary .v-cost {
+  color: #7ee787;
+}
+
+.tl-summary .sep {
+  color: var(--border);
+}

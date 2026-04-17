@@ -7,25 +7,29 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use axum::{
-    extract::{Query, State},
-    http::StatusCode,
-    response::{Html, IntoResponse, Json, Response},
+    extract::{Path as AxumPath, Query, State},
+    http::{header, StatusCode},
+    response::{IntoResponse, Json, Response},
     routing::get,
     Router,
 };
 use duckdb::Connection;
+use include_dir::{include_dir, Dir};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::task::spawn_blocking;
 
 use crate::cli::ServeArgs;
 
+// ── Static web bundle (built by Vite, embedded at compile time) ───────────────
+
+static WEB_DIST: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/web/dist");
+
 // ── State ─────────────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
 struct AppState {
     db_path: String,
-    html: String,
 }
 
 fn open_db(db_path: &str) -> Result<Connection, String> {
@@ -191,8 +195,85 @@ fn err500(msg: impl std::fmt::Display) -> Response {
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
-async fn serve_index(State(state): State<AppState>) -> Html<String> {
-    Html(state.html)
+fn file_response(path: &str) -> Response {
+    let file = match WEB_DIST.get_file(path) {
+        Some(f) => f,
+        None => return (StatusCode::NOT_FOUND, "not found").into_response(),
+    };
+    let mime = mime_guess::from_path(path).first_or_octet_stream();
+    (
+        [
+            (header::CONTENT_TYPE, mime.as_ref().to_owned()),
+            (
+                header::CACHE_CONTROL,
+                "public, max-age=31536000, immutable".to_owned(),
+            ),
+        ],
+        file.contents(),
+    )
+        .into_response()
+}
+
+async fn serve_index() -> Response {
+    let file = match WEB_DIST.get_file("index.html") {
+        Some(f) => f,
+        None => return (StatusCode::INTERNAL_SERVER_ERROR, "index.html missing").into_response(),
+    };
+    (
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        file.contents(),
+    )
+        .into_response()
+}
+
+async fn serve_asset(AxumPath(path): AxumPath<String>) -> Response {
+    file_response(&format!("assets/{path}"))
+}
+
+async fn api_sessions_meta(State(state): State<AppState>) -> Response {
+    let db_path = state.db_path.clone();
+    let result = spawn_blocking(move || -> Result<Value, String> {
+        let conn = open_db(&db_path)?;
+        let (earliest, latest): (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT \
+                   CAST(MIN(first_timestamp) AS VARCHAR), \
+                   CAST(MAX(last_timestamp)  AS VARCHAR) \
+                 FROM transcripts WHERE NOT is_subagent",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .map_err(|e| e.to_string())?;
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT DISTINCT acb.tool_name \
+                 FROM assistant_content_blocks acb \
+                 WHERE acb.block_type = 'tool_use' AND acb.tool_name IS NOT NULL \
+                 ORDER BY acb.tool_name",
+            )
+            .map_err(|e| e.to_string())?;
+        let tools: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(json!({
+            "earliest": earliest,
+            "latest":   latest,
+            "tools":    tools,
+        }))
+    })
+    .await;
+    match result {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => err500(e),
+        Err(e) => err500(e),
+    }
 }
 
 async fn api_projects(State(state): State<AppState>) -> Response {
@@ -241,65 +322,212 @@ async fn api_projects(State(state): State<AppState>) -> Response {
     }
 }
 
-#[derive(Deserialize)]
-struct ProjectQ {
+#[derive(Deserialize, Default)]
+struct SessionsQ {
+    /// Comma-separated project keys. Empty/missing = all.
     project: Option<String>,
+    /// ISO8601 / RFC3339 inclusive lower bound on session last_timestamp.
+    #[serde(rename = "tStart")]
+    t_start: Option<String>,
+    /// Upper bound on session first_timestamp.
+    #[serde(rename = "tEnd")]
+    t_end: Option<String>,
+    /// any | yes | no
+    subagents: Option<String>,
+    /// Comma-separated tool names (match if session used ANY).
+    tools: Option<String>,
+    /// cost | tokens | started | last
+    sort: Option<String>,
+    /// asc | desc
+    order: Option<String>,
 }
 
-async fn api_sessions(State(state): State<AppState>, Query(q): Query<ProjectQ>) -> Response {
-    let project = q.project.unwrap_or_default();
-    if project.is_empty() {
-        return Json(json!([])).into_response();
+fn split_csv(s: &Option<String>) -> Vec<String> {
+    match s {
+        None => Vec::new(),
+        Some(v) => v
+            .split(',')
+            .map(|t| t.trim().to_owned())
+            .filter(|t| !t.is_empty())
+            .collect(),
     }
+}
+
+async fn api_sessions(State(state): State<AppState>, Query(q): Query<SessionsQ>) -> Response {
+    let projects = split_csv(&q.project);
+    let tools = split_csv(&q.tools);
+    let t_start = q.t_start.clone().filter(|s| !s.is_empty());
+    let t_end = q.t_end.clone().filter(|s| !s.is_empty());
+
+    let subagent_filter: Option<bool> = match q.subagents.as_deref() {
+        Some("yes") => Some(true),
+        Some("no") => Some(false),
+        _ => None,
+    };
+
+    let (sort_col, sort_expr) = match q.sort.as_deref().unwrap_or("last") {
+        "cost" => ("cost", "COALESCE(tok.cost_usd, 0)"),
+        "tokens" => (
+            "tokens",
+            "COALESCE(tok.input_tokens, 0) + COALESCE(tok.output_tokens, 0) \
+             + COALESCE(tok.cache_read_tokens, 0) + COALESCE(tok.cache_creation_tokens, 0)",
+        ),
+        "started" => ("started", "s.first_timestamp"),
+        _ => ("last", "s.last_timestamp"),
+    };
+    let order_dir = if q.order.as_deref() == Some("asc") {
+        "ASC NULLS FIRST"
+    } else {
+        "DESC NULLS LAST"
+    };
 
     let db_path = state.db_path.clone();
     let result = spawn_blocking(move || -> Result<Value, String> {
         let conn = open_db(&db_path)?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT \
-               t.session_id, \
-               CAST(t.first_timestamp AS VARCHAR) AS started_at, \
-               CAST(t.last_timestamp  AS VARCHAR) AS last_active, \
-               ROUND(COALESCE(SUM(d.cost_usd), 0.0), 6) AS cost_usd, \
-               EXISTS( \
-                 SELECT 1 FROM transcripts t2 \
-                 WHERE t2.parent_session_id = t.session_id \
-               ) AS has_subagents \
-             FROM transcripts t \
-             LEFT JOIN entries e ON e.file_path = t.file_path \
-             LEFT JOIN assistant_entries_deduped d \
-                    ON d.entry_id = e.entry_id AND d.message_id IS NOT NULL \
-             WHERE NOT t.is_subagent \
-               AND regexp_extract(t.file_path, '.*/projects/([^/]+)/[^/]+\\.jsonl$', 1) = ? \
-             GROUP BY t.session_id, t.first_timestamp, t.last_timestamp \
-             ORDER BY t.last_timestamp DESC NULLS LAST",
-            )
-            .map_err(|e| e.to_string())?;
 
+        let mut where_parts: Vec<String> = Vec::new();
+        let mut params: Vec<String> = Vec::new();
+
+        if !projects.is_empty() {
+            let placeholders = vec!["?"; projects.len()].join(",");
+            where_parts.push(format!("s.project_key IN ({placeholders})"));
+            params.extend(projects.iter().cloned());
+        }
+        if let Some(ts) = &t_start {
+            where_parts.push("s.last_timestamp >= CAST(? AS TIMESTAMP)".to_owned());
+            params.push(ts.clone());
+        }
+        if let Some(te) = &t_end {
+            where_parts.push("s.first_timestamp <= CAST(? AS TIMESTAMP)".to_owned());
+            params.push(te.clone());
+        }
+        if let Some(want) = subagent_filter {
+            where_parts.push(format!("s.has_subagents = {}", if want { "true" } else { "false" }));
+        }
+        if !tools.is_empty() {
+            let placeholders = vec!["?"; tools.len()].join(",");
+            where_parts.push(format!(
+                "list_has_any(COALESCE(tl.tool_names, []::VARCHAR[]), [{placeholders}]::VARCHAR[])"
+            ));
+            params.extend(tools.iter().cloned());
+        }
+        let where_clause = if where_parts.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", where_parts.join(" AND "))
+        };
+
+        let sql = format!(
+            "WITH sessions AS ( \
+               SELECT \
+                 t1.session_id, \
+                 t1.file_path, \
+                 t1.first_timestamp, \
+                 t1.last_timestamp, \
+                 regexp_extract(t1.file_path, '.*/projects/([^/]+)/[^/]+\\.jsonl$', 1) AS project_key, \
+                 EXISTS( \
+                   SELECT 1 FROM transcripts t2 WHERE t2.parent_session_id = t1.session_id \
+                 ) AS has_subagents \
+               FROM transcripts t1 \
+               WHERE NOT t1.is_subagent \
+             ), \
+             tok AS ( \
+               SELECT \
+                 e.file_path, \
+                 SUM(d.cost_usd)                    AS cost_usd, \
+                 SUM(d.input_tokens)                AS input_tokens, \
+                 SUM(d.output_tokens)               AS output_tokens, \
+                 SUM(d.cache_read_input_tokens)     AS cache_read_tokens, \
+                 SUM(d.cache_creation_input_tokens) AS cache_creation_tokens \
+               FROM entries e \
+               JOIN assistant_entries_deduped d ON d.entry_id = e.entry_id \
+               WHERE d.message_id IS NOT NULL \
+               GROUP BY e.file_path \
+             ), \
+             tl AS ( \
+               SELECT \
+                 e.file_path, \
+                 LIST(DISTINCT acb.tool_name) AS tool_names \
+               FROM entries e \
+               JOIN assistant_content_blocks acb \
+                 ON acb.entry_id = e.entry_id \
+                AND acb.block_type = 'tool_use' \
+                AND acb.tool_name IS NOT NULL \
+               GROUP BY e.file_path \
+             ) \
+             SELECT \
+               s.session_id, \
+               s.project_key, \
+               CAST(s.first_timestamp AS VARCHAR) AS started_at, \
+               CAST(s.last_timestamp  AS VARCHAR) AS last_active, \
+               COALESCE(ROUND(tok.cost_usd, 6), 0.0) AS cost_usd, \
+               COALESCE(tok.input_tokens, 0)          AS input_tokens, \
+               COALESCE(tok.output_tokens, 0)         AS output_tokens, \
+               COALESCE(tok.cache_read_tokens, 0)     AS cache_read_tokens, \
+               COALESCE(tok.cache_creation_tokens, 0) AS cache_creation_tokens, \
+               s.has_subagents, \
+               COALESCE(to_json(tl.tool_names), '[]') AS tool_names_json \
+             FROM sessions s \
+             LEFT JOIN tok ON tok.file_path = s.file_path \
+             LEFT JOIN tl  ON tl.file_path  = s.file_path \
+             {where_clause} \
+             ORDER BY {sort_expr} {order_dir}"
+        );
+
+        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let params_iter = duckdb::params_from_iter(params.iter());
         let rows = stmt
-            .query_map([&project], |row| {
+            .query_map(params_iter, |row| {
                 Ok((
                     row.get::<_, Option<String>>(0)?,
                     row.get::<_, Option<String>>(1)?,
                     row.get::<_, Option<String>>(2)?,
-                    row.get::<_, f64>(3)?,
-                    row.get::<_, bool>(4)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, f64>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, i64>(7)?,
+                    row.get::<_, i64>(8)?,
+                    row.get::<_, bool>(9)?,
+                    row.get::<_, String>(10)?,
                 ))
             })
             .map_err(|e| e.to_string())?;
 
         let mut out = Vec::new();
         for row in rows.filter_map(|r| r.ok()) {
-            let (id, started_at, last_active, cost_usd, has_subagents) = row;
+            let (
+                id,
+                project,
+                started_at,
+                last_active,
+                cost_usd,
+                input_tokens,
+                output_tokens,
+                cache_read,
+                cache_creation,
+                has_subagents,
+                tools_json,
+            ) = row;
+            let tools: Vec<String> =
+                serde_json::from_str(&tools_json).unwrap_or_default();
+            let total_tokens = input_tokens + output_tokens + cache_read + cache_creation;
             out.push(json!({
-                "id":           id,
-                "startedAt":    started_at,
-                "lastActive":   last_active,
-                "costUsd":      cost_usd,
-                "hasSubagents": has_subagents,
+                "id":                  id,
+                "project":             project,
+                "startedAt":           started_at,
+                "lastActive":          last_active,
+                "costUsd":             cost_usd,
+                "inputTokens":         input_tokens,
+                "outputTokens":        output_tokens,
+                "cacheReadTokens":     cache_read,
+                "cacheCreationTokens": cache_creation,
+                "totalTokens":         total_tokens,
+                "hasSubagents":        has_subagents,
+                "tools":               tools,
             }));
         }
+        let _ = sort_col;
         Ok(Value::Array(out))
     })
     .await;
@@ -2869,14 +3097,15 @@ pub async fn run(args: ServeArgs) {
     let db_path = args.db.to_string_lossy().into_owned();
     let port = args.port;
 
-    let html = include_str!("../web/index.html").to_string();
-
-    let state = AppState { db_path, html };
+    let state = AppState { db_path };
 
     let app = Router::new()
         .route("/", get(serve_index))
+        .route("/assets/*path", get(serve_asset))
+        .fallback(serve_index)
         .route("/api/projects", get(api_projects))
         .route("/api/sessions", get(api_sessions))
+        .route("/api/sessions/meta", get(api_sessions_meta))
         .route("/api/transcript", get(api_transcript))
         .route("/api/subagent", get(api_subagent))
         .route("/api/dashboard/summary", get(api_dashboard_summary))
