@@ -1,8 +1,13 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() {
-    let web = Path::new("web");
+    let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    let web_src = manifest_dir.join("web");
+    // All npm operations run from OUT_DIR/web so writes stay inside OUT_DIR.
+    let web_out = out_dir.join("web");
+    let web_dist_out = web_out.join("dist");
 
     for f in [
         "web/src",
@@ -17,38 +22,93 @@ fn main() {
     println!("cargo:rerun-if-env-changed=SKIP_WEB_BUILD");
 
     if std::env::var_os("SKIP_WEB_BUILD").is_some() {
-        ensure_dist_exists(web);
+        if !web_dist_out.join("index.html").exists() {
+            copy_dist(&web_src.join("dist"), &web_dist_out);
+        }
         return;
     }
 
     let npm = which("npm");
     if npm.is_none() {
         println!("cargo:warning=npm not found; using prebuilt web/dist (set SKIP_WEB_BUILD=1 to silence)");
-        ensure_dist_exists(web);
+        if !web_dist_out.join("index.html").exists() {
+            copy_dist(&web_src.join("dist"), &web_dist_out);
+        }
         return;
     }
     let npm = npm.unwrap();
 
-    if !web.join("node_modules").exists() {
-        run(&npm, &["ci", "--silent"], web);
+    sync_web_src(&web_src, &web_out);
+
+    if !web_out.join("node_modules").exists() {
+        run(&npm, &["ci", "--silent"], &web_out, &[]);
     }
 
-    run(&npm, &["run", "build", "--silent"], web);
-    ensure_dist_exists(web);
+    run(
+        &npm,
+        &["run", "build", "--silent"],
+        &web_out,
+        &[("VITE_OUT_DIR", web_dist_out.to_str().unwrap())],
+    );
+    ensure_dist_exists(&web_dist_out);
 }
 
-fn ensure_dist_exists(web: &Path) {
-    let idx = web.join("dist").join("index.html");
-    if !idx.exists() {
+// Copy web source files into dst, skipping build artifacts so all npm
+// operations run inside OUT_DIR and never touch the source tree.
+fn sync_web_src(src: &Path, dst: &Path) {
+    std::fs::create_dir_all(dst).unwrap_or_else(|e| panic!("create {dst:?}: {e}"));
+    for entry in std::fs::read_dir(src).unwrap_or_else(|e| panic!("readdir {src:?}: {e}")) {
+        let entry = entry.unwrap();
+        let name = entry.file_name();
+        if matches!(
+            name.to_str(),
+            Some("node_modules") | Some("dist") | Some(".vite")
+        ) {
+            continue;
+        }
+        let dst_path = dst.join(&name);
+        if entry.file_type().unwrap().is_dir() {
+            copy_dir_all(&entry.path(), &dst_path)
+                .unwrap_or_else(|e| panic!("copy dir {:?}: {e}", entry.path()));
+        } else {
+            std::fs::copy(entry.path(), &dst_path)
+                .unwrap_or_else(|e| panic!("copy {:?}: {e}", entry.path()));
+        }
+    }
+}
+
+fn copy_dist(src: &Path, dst: &Path) {
+    if !src.join("index.html").exists() {
         panic!(
-            "web/dist/index.html missing at {}. Run `npm --prefix {} run build` first.",
-            idx.display(),
-            web.display()
+            "web/dist/index.html missing at {}. Run `npm --prefix web run build` first.",
+            src.display()
         );
     }
+    copy_dir_all(src, dst).unwrap_or_else(|e| panic!("copy {src:?} -> {dst:?}: {e}"));
 }
 
-fn which(cmd: &str) -> Option<std::path::PathBuf> {
+fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let dst_path = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_all(&entry.path(), &dst_path)?;
+        } else {
+            std::fs::copy(entry.path(), dst_path)?;
+        }
+    }
+    Ok(())
+}
+
+fn ensure_dist_exists(dist: &Path) {
+    let idx = dist.join("index.html");
+    if !idx.exists() {
+        panic!("web/dist/index.html missing at {}", idx.display());
+    }
+}
+
+fn which(cmd: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {
         let full = dir.join(cmd);
@@ -59,10 +119,13 @@ fn which(cmd: &str) -> Option<std::path::PathBuf> {
     None
 }
 
-fn run(cmd: &Path, args: &[&str], cwd: &Path) {
-    let status = Command::new(cmd)
-        .args(args)
-        .current_dir(cwd)
+fn run(cmd: &Path, args: &[&str], cwd: &Path, env: &[(&str, &str)]) {
+    let mut command = Command::new(cmd);
+    command.args(args).current_dir(cwd);
+    for (k, v) in env {
+        command.env(k, v);
+    }
+    let status = command
         .status()
         .unwrap_or_else(|e| panic!("run {} {:?}: {e}", cmd.display(), args));
     if !status.success() {

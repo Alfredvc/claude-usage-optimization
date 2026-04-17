@@ -28,7 +28,7 @@ use crate::cli::ServeArgs;
 
 // ── Static web bundle (built by Vite, embedded at compile time) ───────────────
 
-static WEB_DIST: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/web/dist");
+static WEB_DIST: Dir<'_> = include_dir!("$OUT_DIR/web/dist");
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
