@@ -33,3 +33,5 @@ crossbeam-channel = { workspace = true }
 toml = { workspace = true }
 include_dir = { workspace = true }
 mime_guess = { workspace = true }
+lru = { workspace = true }
+bytes = { workspace = true }

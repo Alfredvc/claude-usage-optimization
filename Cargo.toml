@@ -33,3 +33,5 @@ axum = "0.7"
 tokio = { version = "1", features = ["full"] }
 include_dir = "0.7"
 mime_guess = "2"
+lru = "0.12"
+bytes = "1"

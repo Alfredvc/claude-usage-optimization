@@ -3,10 +3,14 @@
 //! Reads from a DuckDB database built by `claude-code-transcripts-ingest ingest`.
 //! Serves the embedded `web/index.html` and a JSON API backed by the DB.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap, HashSet};
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, SystemTime};
 
 use axum::{
+    body::Bytes,
     extract::{Path as AxumPath, Query, State},
     http::{header, StatusCode},
     response::{IntoResponse, Json, Response},
@@ -15,6 +19,7 @@ use axum::{
 };
 use duckdb::Connection;
 use include_dir::{include_dir, Dir};
+use lru::LruCache;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::task::spawn_blocking;
@@ -27,13 +32,72 @@ static WEB_DIST: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/web/dist");
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
+type TranscriptKey = (String, Option<String>);
+
+const TRANSCRIPT_CACHE_CAP: usize = 256;
+const REFRESH_POLL_SECS: u64 = 5;
+
 #[derive(Clone)]
 struct AppState {
     db_path: String,
+    db: Arc<Mutex<Connection>>,
+    summary: Arc<RwLock<Arc<SessionSummary>>>,
+    transcript_cache: Arc<Mutex<LruCache<TranscriptKey, Bytes>>>,
+}
+
+struct SessionSummary {
+    rows: Vec<SessionRowCache>,
+    tools: Vec<String>,
+    earliest: Option<String>,
+    latest: Option<String>,
+    projects: Vec<ProjectRowCache>,
+}
+
+struct SessionRowCache {
+    id: String,
+    project: String,
+    started_at: Option<String>,
+    last_active: Option<String>,
+    first_ms: Option<i64>,
+    last_ms: Option<i64>,
+    cost_usd: f64,
+    input_tokens: i64,
+    output_tokens: i64,
+    cache_read_tokens: i64,
+    cache_creation_tokens: i64,
+    total_tokens: i64,
+    has_subagents: bool,
+    tools: Vec<String>,
+}
+
+struct ProjectRowCache {
+    key: String,
+    display: String,
+    session_count: i64,
 }
 
 fn open_db(db_path: &str) -> Result<Connection, String> {
     Connection::open(db_path).map_err(|e| format!("open {db_path}: {e}"))
+}
+
+fn parse_iso_ms(s: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(s)
+        .map(|dt| dt.timestamp_millis())
+        .ok()
+        .or_else(|| {
+            chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.f")
+                .ok()
+                .map(|ndt| ndt.and_utc().timestamp_millis())
+        })
+        .or_else(|| {
+            chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f")
+                .ok()
+                .map(|ndt| ndt.and_utc().timestamp_millis())
+        })
+}
+
+fn json_bytes_response(bytes: Bytes) -> Response {
+    ([(header::CONTENT_TYPE, "application/json")], bytes).into_response()
 }
 
 // ── display_name ──────────────────────────────────────────────────────────────
@@ -234,92 +298,207 @@ async fn serve_asset(AxumPath(path): AxumPath<String>) -> Response {
 }
 
 async fn api_sessions_meta(State(state): State<AppState>) -> Response {
-    let db_path = state.db_path.clone();
-    let result = spawn_blocking(move || -> Result<Value, String> {
-        let conn = open_db(&db_path)?;
-        let (earliest, latest): (Option<String>, Option<String>) = conn
-            .query_row(
-                "SELECT \
-                   CAST(MIN(first_timestamp) AS VARCHAR), \
-                   CAST(MAX(last_timestamp)  AS VARCHAR) \
-                 FROM transcripts WHERE NOT is_subagent",
-                [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .map_err(|e| e.to_string())?;
-
-        let mut stmt = conn
-            .prepare(
-                "SELECT DISTINCT acb.tool_name \
-                 FROM assistant_content_blocks acb \
-                 WHERE acb.block_type = 'tool_use' AND acb.tool_name IS NOT NULL \
-                 ORDER BY acb.tool_name",
-            )
-            .map_err(|e| e.to_string())?;
-        let tools: Vec<String> = stmt
-            .query_map([], |row| row.get::<_, String>(0))
-            .map_err(|e| e.to_string())?
-            .filter_map(|r| r.ok())
-            .collect();
-
-        Ok(json!({
-            "earliest": earliest,
-            "latest":   latest,
-            "tools":    tools,
+    let summary = state.summary.read().map(|g| g.clone());
+    match summary {
+        Ok(s) => Json(json!({
+            "earliest": s.earliest,
+            "latest":   s.latest,
+            "tools":    s.tools,
         }))
-    })
-    .await;
-    match result {
-        Ok(Ok(v)) => Json(v).into_response(),
-        Ok(Err(e)) => err500(e),
+        .into_response(),
         Err(e) => err500(e),
     }
 }
 
 async fn api_projects(State(state): State<AppState>) -> Response {
-    let db_path = state.db_path.clone();
-    let result = spawn_blocking(move || -> Result<Value, String> {
-        let conn = open_db(&db_path)?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT \
-               regexp_extract(file_path, '.*/projects/([^/]+)/[^/]+\\.jsonl$', 1) AS project_key, \
-               COUNT(*) AS session_count \
-             FROM transcripts \
-             WHERE NOT is_subagent \
-               AND regexp_extract(file_path, '.*/projects/([^/]+)/[^/]+\\.jsonl$', 1) != '' \
-             GROUP BY project_key \
-             ORDER BY MAX(last_timestamp) DESC NULLS LAST",
-            )
-            .map_err(|e| e.to_string())?;
-
-        let rows = stmt
-            .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-            })
-            .map_err(|e| e.to_string())?;
-
-        let mut out = Vec::new();
-        for row in rows.filter_map(|r| r.ok()) {
-            let (key, count) = row;
-            if key.is_empty() {
-                continue;
-            }
-            out.push(json!({
-                "key":          key.clone(),
-                "display":      display_name(&key),
-                "sessionCount": count,
-            }));
+    let summary = state.summary.read().map(|g| g.clone());
+    match summary {
+        Ok(s) => {
+            let out: Vec<Value> = s
+                .projects
+                .iter()
+                .map(|p| {
+                    json!({
+                        "key":          p.key,
+                        "display":      p.display,
+                        "sessionCount": p.session_count,
+                    })
+                })
+                .collect();
+            Json(Value::Array(out)).into_response()
         }
-        Ok(Value::Array(out))
-    })
-    .await;
-
-    match result {
-        Ok(Ok(v)) => Json(v).into_response(),
-        Ok(Err(e)) => err500(e),
         Err(e) => err500(e),
     }
+}
+
+// Precomputed session summary: computed once at startup, refreshed by the
+// mtime-poll task when the DB file changes. All of `/api/sessions`,
+// `/api/projects`, `/api/sessions/meta` serve from this — zero DB work per
+// request after startup.
+fn compute_summary(conn: &Connection) -> Result<SessionSummary, String> {
+    let sql = "WITH sessions AS ( \
+             SELECT \
+               t1.session_id, \
+               t1.file_path, \
+               t1.first_timestamp, \
+               t1.last_timestamp, \
+               regexp_extract(t1.file_path, '.*/projects/([^/]+)/[^/]+\\.jsonl$', 1) AS project_key, \
+               EXISTS(SELECT 1 FROM transcripts t2 WHERE t2.parent_session_id = t1.session_id) AS has_subagents \
+             FROM transcripts t1 \
+             WHERE NOT t1.is_subagent \
+           ), \
+           tok AS ( \
+             SELECT e.file_path, \
+                    SUM(d.cost_usd)                    AS cost_usd, \
+                    SUM(d.input_tokens)                AS input_tokens, \
+                    SUM(d.output_tokens)               AS output_tokens, \
+                    SUM(d.cache_read_input_tokens)     AS cache_read_tokens, \
+                    SUM(d.cache_creation_input_tokens) AS cache_creation_tokens \
+             FROM entries e JOIN assistant_entries_deduped d ON d.entry_id = e.entry_id \
+             WHERE d.message_id IS NOT NULL \
+             GROUP BY e.file_path \
+           ), \
+           tl AS ( \
+             SELECT e.file_path, LIST(DISTINCT acb.tool_name) AS tool_names \
+             FROM entries e JOIN assistant_content_blocks acb \
+               ON acb.entry_id = e.entry_id \
+              AND acb.block_type = 'tool_use' \
+              AND acb.tool_name IS NOT NULL \
+             GROUP BY e.file_path \
+           ) \
+           SELECT s.session_id, s.project_key, \
+                  CAST(s.first_timestamp AS VARCHAR), \
+                  CAST(s.last_timestamp  AS VARCHAR), \
+                  epoch_ms(s.first_timestamp), \
+                  epoch_ms(s.last_timestamp), \
+                  COALESCE(ROUND(tok.cost_usd, 6), 0.0), \
+                  COALESCE(tok.input_tokens, 0), \
+                  COALESCE(tok.output_tokens, 0), \
+                  COALESCE(tok.cache_read_tokens, 0), \
+                  COALESCE(tok.cache_creation_tokens, 0), \
+                  s.has_subagents, \
+                  COALESCE(to_json(tl.tool_names), '[]') \
+           FROM sessions s \
+           LEFT JOIN tok ON tok.file_path = s.file_path \
+           LEFT JOIN tl  ON tl.file_path  = s.file_path";
+
+    let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+    let rows_iter = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<i64>>(4)?,
+                row.get::<_, Option<i64>>(5)?,
+                row.get::<_, f64>(6)?,
+                row.get::<_, i64>(7)?,
+                row.get::<_, i64>(8)?,
+                row.get::<_, i64>(9)?,
+                row.get::<_, i64>(10)?,
+                row.get::<_, bool>(11)?,
+                row.get::<_, String>(12)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut rows: Vec<SessionRowCache> = Vec::new();
+    let mut tools_set: BTreeSet<String> = BTreeSet::new();
+    let mut earliest_ms: Option<i64> = None;
+    let mut latest_ms: Option<i64> = None;
+    let mut earliest_str: Option<String> = None;
+    let mut latest_str: Option<String> = None;
+    // project_key -> (session_count, latest_last_ms)
+    let mut proj_counts: HashMap<String, (i64, Option<i64>)> = HashMap::new();
+
+    for row in rows_iter.filter_map(|r| r.ok()) {
+        let (
+            id,
+            project,
+            started_at,
+            last_active,
+            first_ms,
+            last_ms,
+            cost_usd,
+            input_tokens,
+            output_tokens,
+            cache_read_tokens,
+            cache_creation_tokens,
+            has_subagents,
+            tools_json,
+        ) = row;
+        let id = id.unwrap_or_default();
+        let project = project.unwrap_or_default();
+        let tools: Vec<String> = serde_json::from_str(&tools_json).unwrap_or_default();
+        for t in &tools {
+            tools_set.insert(t.clone());
+        }
+        let total_tokens = input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens;
+
+        if let Some(fm) = first_ms {
+            if earliest_ms.is_none_or(|e| fm < e) {
+                earliest_ms = Some(fm);
+                earliest_str = started_at.clone();
+            }
+        }
+        if let Some(lm) = last_ms {
+            if latest_ms.is_none_or(|l| lm > l) {
+                latest_ms = Some(lm);
+                latest_str = last_active.clone();
+            }
+        }
+
+        if !project.is_empty() {
+            let entry = proj_counts.entry(project.clone()).or_insert((0, None));
+            entry.0 += 1;
+            if let Some(lm) = last_ms {
+                if entry.1.is_none_or(|e| lm > e) {
+                    entry.1 = Some(lm);
+                }
+            }
+        }
+
+        rows.push(SessionRowCache {
+            id,
+            project,
+            started_at,
+            last_active,
+            first_ms,
+            last_ms,
+            cost_usd,
+            input_tokens,
+            output_tokens,
+            cache_read_tokens,
+            cache_creation_tokens,
+            total_tokens,
+            has_subagents,
+            tools,
+        });
+    }
+
+    // Order projects by latest activity DESC, matching the old SQL.
+    let mut proj_vec: Vec<(String, i64, Option<i64>)> = proj_counts
+        .into_iter()
+        .map(|(k, (c, m))| (k, c, m))
+        .collect();
+    proj_vec.sort_by(|a, b| b.2.cmp(&a.2));
+    let projects: Vec<ProjectRowCache> = proj_vec
+        .into_iter()
+        .map(|(k, c, _)| ProjectRowCache {
+            display: display_name(&k),
+            key: k,
+            session_count: c,
+        })
+        .collect();
+
+    Ok(SessionSummary {
+        rows,
+        tools: tools_set.into_iter().collect(),
+        earliest: earliest_str,
+        latest: latest_str,
+        projects,
+    })
 }
 
 #[derive(Deserialize, Default)]
@@ -353,11 +532,20 @@ fn split_csv(s: &Option<String>) -> Vec<String> {
     }
 }
 
+// Filters + sorts the precomputed session summary in memory. Zero DB work.
 async fn api_sessions(State(state): State<AppState>, Query(q): Query<SessionsQ>) -> Response {
     let projects = split_csv(&q.project);
     let tools = split_csv(&q.tools);
-    let t_start = q.t_start.clone().filter(|s| !s.is_empty());
-    let t_end = q.t_end.clone().filter(|s| !s.is_empty());
+    let t_start_ms = q
+        .t_start
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .and_then(parse_iso_ms);
+    let t_end_ms = q
+        .t_end
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .and_then(parse_iso_ms);
 
     let subagent_filter: Option<bool> = match q.subagents.as_deref() {
         Some("yes") => Some(true),
@@ -365,178 +553,84 @@ async fn api_sessions(State(state): State<AppState>, Query(q): Query<SessionsQ>)
         _ => None,
     };
 
-    let (sort_col, sort_expr) = match q.sort.as_deref().unwrap_or("last") {
-        "cost" => ("cost", "COALESCE(tok.cost_usd, 0)"),
-        "tokens" => (
-            "tokens",
-            "COALESCE(tok.input_tokens, 0) + COALESCE(tok.output_tokens, 0) \
-             + COALESCE(tok.cache_read_tokens, 0) + COALESCE(tok.cache_creation_tokens, 0)",
-        ),
-        "started" => ("started", "s.first_timestamp"),
-        _ => ("last", "s.last_timestamp"),
-    };
-    let order_dir = if q.order.as_deref() == Some("asc") {
-        "ASC NULLS FIRST"
-    } else {
-        "DESC NULLS LAST"
+    let sort = q.sort.as_deref().unwrap_or("last").to_owned();
+    let asc = q.order.as_deref() == Some("asc");
+
+    let summary = match state.summary.read() {
+        Ok(g) => g.clone(),
+        Err(e) => return err500(e),
     };
 
-    let db_path = state.db_path.clone();
-    let result = spawn_blocking(move || -> Result<Value, String> {
-        let conn = open_db(&db_path)?;
+    let project_set: HashSet<&str> = projects.iter().map(String::as_str).collect();
+    let tool_set: HashSet<&str> = tools.iter().map(String::as_str).collect();
 
-        let mut where_parts: Vec<String> = Vec::new();
-        let mut params: Vec<String> = Vec::new();
+    let mut filtered: Vec<&SessionRowCache> = summary
+        .rows
+        .iter()
+        .filter(|r| {
+            if !project_set.is_empty() && !project_set.contains(r.project.as_str()) {
+                return false;
+            }
+            if let Some(ts) = t_start_ms {
+                if r.last_ms.is_none_or(|m| m < ts) {
+                    return false;
+                }
+            }
+            if let Some(te) = t_end_ms {
+                if r.first_ms.is_none_or(|m| m > te) {
+                    return false;
+                }
+            }
+            if let Some(want) = subagent_filter {
+                if r.has_subagents != want {
+                    return false;
+                }
+            }
+            if !tool_set.is_empty() && !r.tools.iter().any(|t| tool_set.contains(t.as_str())) {
+                return false;
+            }
+            true
+        })
+        .collect();
 
-        if !projects.is_empty() {
-            let placeholders = vec!["?"; projects.len()].join(",");
-            where_parts.push(format!("s.project_key IN ({placeholders})"));
-            params.extend(projects.iter().cloned());
-        }
-        if let Some(ts) = &t_start {
-            where_parts.push("s.last_timestamp >= CAST(? AS TIMESTAMP)".to_owned());
-            params.push(ts.clone());
-        }
-        if let Some(te) = &t_end {
-            where_parts.push("s.first_timestamp <= CAST(? AS TIMESTAMP)".to_owned());
-            params.push(te.clone());
-        }
-        if let Some(want) = subagent_filter {
-            where_parts.push(format!("s.has_subagents = {}", if want { "true" } else { "false" }));
-        }
-        if !tools.is_empty() {
-            let placeholders = vec!["?"; tools.len()].join(",");
-            where_parts.push(format!(
-                "list_has_any(COALESCE(tl.tool_names, []::VARCHAR[]), [{placeholders}]::VARCHAR[])"
-            ));
-            params.extend(tools.iter().cloned());
-        }
-        let where_clause = if where_parts.is_empty() {
-            String::new()
-        } else {
-            format!("WHERE {}", where_parts.join(" AND "))
+    filtered.sort_by(|a, b| {
+        let cmp = match sort.as_str() {
+            "cost" => a
+                .cost_usd
+                .partial_cmp(&b.cost_usd)
+                .unwrap_or(std::cmp::Ordering::Equal),
+            "tokens" => a.total_tokens.cmp(&b.total_tokens),
+            "started" => a.first_ms.cmp(&b.first_ms),
+            _ => a.last_ms.cmp(&b.last_ms),
         };
-
-        let sql = format!(
-            "WITH sessions AS ( \
-               SELECT \
-                 t1.session_id, \
-                 t1.file_path, \
-                 t1.first_timestamp, \
-                 t1.last_timestamp, \
-                 regexp_extract(t1.file_path, '.*/projects/([^/]+)/[^/]+\\.jsonl$', 1) AS project_key, \
-                 EXISTS( \
-                   SELECT 1 FROM transcripts t2 WHERE t2.parent_session_id = t1.session_id \
-                 ) AS has_subagents \
-               FROM transcripts t1 \
-               WHERE NOT t1.is_subagent \
-             ), \
-             tok AS ( \
-               SELECT \
-                 e.file_path, \
-                 SUM(d.cost_usd)                    AS cost_usd, \
-                 SUM(d.input_tokens)                AS input_tokens, \
-                 SUM(d.output_tokens)               AS output_tokens, \
-                 SUM(d.cache_read_input_tokens)     AS cache_read_tokens, \
-                 SUM(d.cache_creation_input_tokens) AS cache_creation_tokens \
-               FROM entries e \
-               JOIN assistant_entries_deduped d ON d.entry_id = e.entry_id \
-               WHERE d.message_id IS NOT NULL \
-               GROUP BY e.file_path \
-             ), \
-             tl AS ( \
-               SELECT \
-                 e.file_path, \
-                 LIST(DISTINCT acb.tool_name) AS tool_names \
-               FROM entries e \
-               JOIN assistant_content_blocks acb \
-                 ON acb.entry_id = e.entry_id \
-                AND acb.block_type = 'tool_use' \
-                AND acb.tool_name IS NOT NULL \
-               GROUP BY e.file_path \
-             ) \
-             SELECT \
-               s.session_id, \
-               s.project_key, \
-               CAST(s.first_timestamp AS VARCHAR) AS started_at, \
-               CAST(s.last_timestamp  AS VARCHAR) AS last_active, \
-               COALESCE(ROUND(tok.cost_usd, 6), 0.0) AS cost_usd, \
-               COALESCE(tok.input_tokens, 0)          AS input_tokens, \
-               COALESCE(tok.output_tokens, 0)         AS output_tokens, \
-               COALESCE(tok.cache_read_tokens, 0)     AS cache_read_tokens, \
-               COALESCE(tok.cache_creation_tokens, 0) AS cache_creation_tokens, \
-               s.has_subagents, \
-               COALESCE(to_json(tl.tool_names), '[]') AS tool_names_json \
-             FROM sessions s \
-             LEFT JOIN tok ON tok.file_path = s.file_path \
-             LEFT JOIN tl  ON tl.file_path  = s.file_path \
-             {where_clause} \
-             ORDER BY {sort_expr} {order_dir}"
-        );
-
-        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-        let params_iter = duckdb::params_from_iter(params.iter());
-        let rows = stmt
-            .query_map(params_iter, |row| {
-                Ok((
-                    row.get::<_, Option<String>>(0)?,
-                    row.get::<_, Option<String>>(1)?,
-                    row.get::<_, Option<String>>(2)?,
-                    row.get::<_, Option<String>>(3)?,
-                    row.get::<_, f64>(4)?,
-                    row.get::<_, i64>(5)?,
-                    row.get::<_, i64>(6)?,
-                    row.get::<_, i64>(7)?,
-                    row.get::<_, i64>(8)?,
-                    row.get::<_, bool>(9)?,
-                    row.get::<_, String>(10)?,
-                ))
-            })
-            .map_err(|e| e.to_string())?;
-
-        let mut out = Vec::new();
-        for row in rows.filter_map(|r| r.ok()) {
-            let (
-                id,
-                project,
-                started_at,
-                last_active,
-                cost_usd,
-                input_tokens,
-                output_tokens,
-                cache_read,
-                cache_creation,
-                has_subagents,
-                tools_json,
-            ) = row;
-            let tools: Vec<String> =
-                serde_json::from_str(&tools_json).unwrap_or_default();
-            let total_tokens = input_tokens + output_tokens + cache_read + cache_creation;
-            out.push(json!({
-                "id":                  id,
-                "project":             project,
-                "startedAt":           started_at,
-                "lastActive":          last_active,
-                "costUsd":             cost_usd,
-                "inputTokens":         input_tokens,
-                "outputTokens":        output_tokens,
-                "cacheReadTokens":     cache_read,
-                "cacheCreationTokens": cache_creation,
-                "totalTokens":         total_tokens,
-                "hasSubagents":        has_subagents,
-                "tools":               tools,
-            }));
+        if asc {
+            cmp
+        } else {
+            cmp.reverse()
         }
-        let _ = sort_col;
-        Ok(Value::Array(out))
-    })
-    .await;
+    });
 
-    match result {
-        Ok(Ok(v)) => Json(v).into_response(),
-        Ok(Err(e)) => err500(e),
-        Err(e) => err500(e),
-    }
+    let out: Vec<Value> = filtered
+        .iter()
+        .map(|r| {
+            json!({
+                "id":                  r.id,
+                "project":             r.project,
+                "startedAt":           r.started_at,
+                "lastActive":          r.last_active,
+                "costUsd":             r.cost_usd,
+                "inputTokens":         r.input_tokens,
+                "outputTokens":        r.output_tokens,
+                "cacheReadTokens":     r.cache_read_tokens,
+                "cacheCreationTokens": r.cache_creation_tokens,
+                "totalTokens":         r.total_tokens,
+                "hasSubagents":        r.has_subagents,
+                "tools":               r.tools,
+            })
+        })
+        .collect();
+
+    Json(Value::Array(out)).into_response()
 }
 
 #[derive(Deserialize)]
@@ -546,21 +640,40 @@ struct TranscriptQ {
     session: Option<String>,
 }
 
+// LRU-cached timeline build. Second visit to the same session returns cached
+// serialized JSON bytes (no DB work, no re-serialization).
 async fn api_transcript(State(state): State<AppState>, Query(q): Query<TranscriptQ>) -> Response {
     let session = q.session.unwrap_or_default();
     if session.is_empty() {
         return (StatusCode::BAD_REQUEST, "session required").into_response();
     }
-    let db_path = state.db_path.clone();
-    let result = spawn_blocking(move || -> Result<Value, String> {
-        let conn = open_db(&db_path)?;
+    let key: TranscriptKey = (session.clone(), None);
+
+    if let Some(bytes) = state
+        .transcript_cache
+        .lock()
+        .ok()
+        .and_then(|mut c| c.get(&key).cloned())
+    {
+        return json_bytes_response(bytes);
+    }
+
+    let db = state.db.clone();
+    let cache = state.transcript_cache.clone();
+    let result = spawn_blocking(move || -> Result<Bytes, String> {
+        let conn = db.lock().map_err(|e| format!("db lock: {e}"))?;
         let fp = session_file_path(&conn, &session, false, None)?;
-        build_timeline(&conn, &fp, false)
+        let v = build_timeline(&conn, &fp, false)?;
+        let bytes = Bytes::from(serde_json::to_vec(&v).map_err(|e| e.to_string())?);
+        if let Ok(mut c) = cache.lock() {
+            c.put(key, bytes.clone());
+        }
+        Ok(bytes)
     })
     .await;
 
     match result {
-        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Ok(bytes)) => json_bytes_response(bytes),
         Ok(Err(e)) => (StatusCode::NOT_FOUND, e).into_response(),
         Err(e) => err500(e),
     }
@@ -578,16 +691,33 @@ async fn api_subagent(State(state): State<AppState>, Query(q): Query<SubagentQ>)
     if session.is_empty() || agent.is_empty() {
         return (StatusCode::BAD_REQUEST, "session and agent required").into_response();
     }
-    let db_path = state.db_path.clone();
-    let result = spawn_blocking(move || -> Result<Value, String> {
-        let conn = open_db(&db_path)?;
+    let key: TranscriptKey = (session.clone(), Some(agent.clone()));
+
+    if let Some(bytes) = state
+        .transcript_cache
+        .lock()
+        .ok()
+        .and_then(|mut c| c.get(&key).cloned())
+    {
+        return json_bytes_response(bytes);
+    }
+
+    let db = state.db.clone();
+    let cache = state.transcript_cache.clone();
+    let result = spawn_blocking(move || -> Result<Bytes, String> {
+        let conn = db.lock().map_err(|e| format!("db lock: {e}"))?;
         let fp = session_file_path(&conn, &session, true, Some(&agent))?;
-        build_timeline(&conn, &fp, true)
+        let v = build_timeline(&conn, &fp, true)?;
+        let bytes = Bytes::from(serde_json::to_vec(&v).map_err(|e| e.to_string())?);
+        if let Ok(mut c) = cache.lock() {
+            c.put(key, bytes.clone());
+        }
+        Ok(bytes)
     })
     .await;
 
     match result {
-        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Ok(bytes)) => json_bytes_response(bytes),
         Ok(Err(e)) => (StatusCode::NOT_FOUND, e).into_response(),
         Err(e) => err500(e),
     }
@@ -3097,7 +3227,96 @@ pub async fn run(args: ServeArgs) {
     let db_path = args.db.to_string_lossy().into_owned();
     let port = args.port;
 
-    let state = AppState { db_path };
+    // Open a single shared DuckDB connection. All session-list / transcript
+    // handlers serialize access through Arc<Mutex<Connection>>; dashboard
+    // endpoints still use open_db() for now (less hot path).
+    let conn = Connection::open(&db_path).unwrap_or_else(|e| {
+        eprintln!("open {db_path}: {e}");
+        std::process::exit(1)
+    });
+    let db = Arc::new(Mutex::new(conn));
+
+    // Precompute the session summary once so /api/sessions, /api/projects,
+    // /api/sessions/meta are free.
+    let initial = {
+        let guard = db.lock().expect("db lock");
+        match compute_summary(&guard) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("initial summary: {e}");
+                std::process::exit(1)
+            }
+        }
+    };
+    println!(
+        "summary: {} sessions, {} projects, {} distinct tools",
+        initial.rows.len(),
+        initial.projects.len(),
+        initial.tools.len(),
+    );
+
+    let summary = Arc::new(RwLock::new(Arc::new(initial)));
+    let transcript_cache = Arc::new(Mutex::new(LruCache::new(
+        NonZeroUsize::new(TRANSCRIPT_CACHE_CAP).expect("cap > 0"),
+    )));
+
+    let state = AppState {
+        db_path: db_path.clone(),
+        db: db.clone(),
+        summary: summary.clone(),
+        transcript_cache: transcript_cache.clone(),
+    };
+
+    // Background task: poll DB file mtime. On change, reopen the shared
+    // connection, rebuild summary, clear transcript cache.
+    {
+        let poll_path = db_path.clone();
+        let poll_db = db.clone();
+        let poll_summary = summary.clone();
+        let poll_cache = transcript_cache.clone();
+        tokio::spawn(async move {
+            let mut last_mtime: Option<SystemTime> = std::fs::metadata(&poll_path)
+                .ok()
+                .and_then(|m| m.modified().ok());
+            loop {
+                tokio::time::sleep(Duration::from_secs(REFRESH_POLL_SECS)).await;
+                let mtime = match std::fs::metadata(&poll_path).and_then(|m| m.modified()) {
+                    Ok(m) => m,
+                    Err(_) => continue,
+                };
+                if last_mtime == Some(mtime) {
+                    continue;
+                }
+                last_mtime = Some(mtime);
+
+                let path = poll_path.clone();
+                let db_inner = poll_db.clone();
+                let rebuild = spawn_blocking(move || -> Result<SessionSummary, String> {
+                    let new_conn =
+                        Connection::open(&path).map_err(|e| format!("reopen {path}: {e}"))?;
+                    let s = compute_summary(&new_conn)?;
+                    let mut g = db_inner.lock().map_err(|e| format!("db lock: {e}"))?;
+                    *g = new_conn;
+                    Ok(s)
+                })
+                .await;
+
+                match rebuild {
+                    Ok(Ok(s)) => {
+                        if let Ok(mut g) = poll_summary.write() {
+                            *g = Arc::new(s);
+                        }
+                        if let Ok(mut c) = poll_cache.lock() {
+                            c.clear();
+                        }
+                        eprintln!("db changed, summary refreshed, transcript cache cleared");
+                    }
+                    Ok(Err(e)) => eprintln!("refresh: {e}"),
+                    Err(e) => eprintln!("refresh task: {e}"),
+                }
+            }
+        });
+    }
 
     let app = Router::new()
         .route("/", get(serve_index))
