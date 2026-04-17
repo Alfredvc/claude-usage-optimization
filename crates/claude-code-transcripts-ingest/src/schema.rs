@@ -426,12 +426,20 @@ CREATE TABLE IF NOT EXISTS speculation_accept_entries (
 );
 "#;
 
-// Dedup view for billing-safe aggregation over assistant_entries.
+// Dedup table for billing-safe aggregation over assistant_entries.
 //
-// Why: a single streaming response writes one JSONL entry per content block
-// (thinking + text + tool_use → 3 entries) and all share the same `message.id`
-// and the same `usage` figures (Claude Code mutates the in-memory usage object
-// before flush). Summing `assistant_entries.cost_usd` directly overcounts.
+// Materialized as a real TABLE (not a VIEW) post-ingest. The dedup logic uses
+// a window function over the entire assistant_entries table; as a view it would
+// re-run that ~290k-row WINDOW + sort on every query (~360 ms each) and the
+// dashboard fires ~26 such queries in parallel. Materializing it once at ingest
+// time eliminates that recompute. Ingest is a full rebuild, so there is no
+// staleness concern.
+//
+// Why dedup is needed: a single streaming response writes one JSONL entry per
+// content block (thinking + text + tool_use → 3 entries) and all share the
+// same `message.id` and the same `usage` figures (Claude Code mutates the
+// in-memory usage object before flush). Summing `assistant_entries.cost_usd`
+// directly overcounts.
 //
 // Rule: partition by (file_path, message_id), pick the authoritative row:
 //   1. prefer rows with stop_reason set (final entry in the response)
@@ -441,8 +449,8 @@ CREATE TABLE IF NOT EXISTS speculation_accept_entries (
 // message_id NULL = synthetic error message (is_api_error_message = true,
 // model = '<synthetic>'). Not a billing event. Kept as distinct rows via
 // COALESCE so they are preserved, but cost queries should filter them out.
-pub const DEDUPED_VIEW_DDL: &str = r#"
-CREATE OR REPLACE VIEW assistant_entries_deduped AS
+pub const DEDUPED_TABLE_DDL: &str = r#"
+CREATE OR REPLACE TABLE assistant_entries_deduped AS
 SELECT ae.*
 FROM assistant_entries ae
 JOIN entries e ON e.entry_id = ae.entry_id
@@ -454,22 +462,27 @@ QUALIFY ROW_NUMBER() OVER (
         ae.entry_id ASC
 ) = 1;
 
-COMMENT ON VIEW assistant_entries_deduped IS
-'Billing-safe dedup of assistant_entries. One row per (file_path, message_id) = one real API billing event. USE THIS for any SUM(cost_usd) / SUM(*_tokens) aggregation. Raw assistant_entries has N rows per response (one per content block) sharing the same usage figures — summing it directly overcounts by ~2-3x. Dedup rule: partition by (file_path, message_id), prefer rows with stop_reason set, then max output_tokens, then min entry_id. Rows with NULL message_id are synthetic error messages (is_api_error_message = true) and were never billed — filter them out for cost queries with `WHERE message_id IS NOT NULL`. See docs/cost-attribution.md for full rationale.';
+CREATE UNIQUE INDEX IF NOT EXISTS uq_assistant_entries_deduped_pk
+    ON assistant_entries_deduped(entry_id);
+CREATE INDEX IF NOT EXISTS idx_assistant_entries_deduped_message_id
+    ON assistant_entries_deduped(message_id);
+
+COMMENT ON TABLE assistant_entries_deduped IS
+'Billing-safe dedup of assistant_entries. One row per (file_path, message_id) = one real API billing event. USE THIS for any SUM(cost_usd) / SUM(*_tokens) aggregation. Raw assistant_entries has N rows per response (one per content block) sharing the same usage figures — summing it directly overcounts by ~2-3x. Materialized at ingest time (was a VIEW; the window function recompute dominated dashboard query latency). Dedup rule: partition by (file_path, message_id), prefer rows with stop_reason set, then max output_tokens, then min entry_id. Rows with NULL message_id are synthetic error messages (is_api_error_message = true) and were never billed — filter them out for cost queries with `WHERE message_id IS NOT NULL`. See docs/cost-attribution.md for full rationale.';
 
 COMMENT ON COLUMN assistant_entries_deduped.cost_usd IS
 'Safe to SUM. One row per billing event (unlike assistant_entries.cost_usd which is duplicated across content blocks).';
 
 COMMENT ON COLUMN assistant_entries_deduped.input_tokens IS
-'Safe to SUM. Authoritative billing figure (from message_delta). See view-level comment.';
+'Safe to SUM. Authoritative billing figure (from message_delta). See table-level comment.';
 
 COMMENT ON COLUMN assistant_entries_deduped.output_tokens IS
 'Safe to SUM. Authoritative billing figure. Max-output_tokens tiebreaker guards against partial records written before message_delta arrived.';
 
-COMMENT ON COLUMN assistant_entries_deduped.cache_creation_input_tokens IS 'Safe to SUM. See view-level comment.';
-COMMENT ON COLUMN assistant_entries_deduped.cache_read_input_tokens     IS 'Safe to SUM. See view-level comment.';
-COMMENT ON COLUMN assistant_entries_deduped.cache_creation_5m           IS 'Safe to SUM. See view-level comment.';
-COMMENT ON COLUMN assistant_entries_deduped.cache_creation_1h           IS 'Safe to SUM. See view-level comment.';
+COMMENT ON COLUMN assistant_entries_deduped.cache_creation_input_tokens IS 'Safe to SUM. See table-level comment.';
+COMMENT ON COLUMN assistant_entries_deduped.cache_read_input_tokens     IS 'Safe to SUM. See table-level comment.';
+COMMENT ON COLUMN assistant_entries_deduped.cache_creation_5m           IS 'Safe to SUM. See table-level comment.';
+COMMENT ON COLUMN assistant_entries_deduped.cache_creation_1h           IS 'Safe to SUM. See table-level comment.';
 "#;
 
 pub const TOOL_USES_VIEW_DDL: &str = r#"

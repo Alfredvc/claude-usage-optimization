@@ -27,7 +27,7 @@ use crate::cli::IngestArgs;
 use crate::parse::{parse_file, ParsedFile};
 use crate::pricing::{self, build_lookup, merge, seed_rows, PriceRow};
 use crate::schema::{
-    COMMENTS_DDL, DEDUPED_VIEW_DDL, INDEXES_DDL, PK_DDL, SCHEMA_DDL, TOOL_USES_VIEW_DDL,
+    COMMENTS_DDL, DEDUPED_TABLE_DDL, INDEXES_DDL, PK_DDL, SCHEMA_DDL, TOOL_USES_VIEW_DDL,
 };
 
 pub fn run(cli: IngestArgs) -> ! {
@@ -218,12 +218,12 @@ pub fn run(cli: IngestArgs) -> ! {
 
     conn.execute_batch(TOOL_USES_VIEW_DDL)
         .unwrap_or_else(|e| die(format!("create view: {e}")));
-    conn.execute_batch(DEDUPED_VIEW_DDL)
-        .unwrap_or_else(|e| die(format!("create deduped view: {e}")));
     conn.execute_batch(PK_DDL)
         .unwrap_or_else(|e| die(format!("add primary keys: {e}")));
     conn.execute_batch(INDEXES_DDL)
         .unwrap_or_else(|e| die(format!("create indexes: {e}")));
+    conn.execute_batch(DEDUPED_TABLE_DDL)
+        .unwrap_or_else(|e| die(format!("create deduped table: {e}")));
     conn.execute_batch(COMMENTS_DDL)
         .unwrap_or_else(|e| die(format!("add column comments: {e}")));
 

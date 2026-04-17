@@ -21,7 +21,7 @@ There is exactly one thing that will silently give you wrong numbers:
 
 **Do not `SUM` cost or token columns on raw `assistant_entries`.** A single streaming assistant response writes one JSONL entry per content block (e.g. `thinking` + `text` + `tool_use` → 3 entries), and every one of those entries carries the same `message_id` and the same `usage` values. Summing the raw table double- (or triple-) counts those responses. Empirically this overcounts cost by ~2× on typical data.
 
-**Use the `assistant_entries_deduped` view instead.** It's keyed on `(file_path, message_id)` and keeps the authoritative row per billing event (row with `stop_reason` set first, then largest `output_tokens`, then smallest `entry_id`). Unbilled rows (synthetic error messages from the client — `is_api_error_message = true` or `model = '<synthetic>'`) were never priced, so they have `cost_usd = NULL` and `SUM(cost_usd)` skips them automatically.
+**Use the `assistant_entries_deduped` table instead.** It's keyed on `(file_path, message_id)` and keeps the authoritative row per billing event (row with `stop_reason` set first, then largest `output_tokens`, then smallest `entry_id`). Unbilled rows (synthetic error messages from the client — `is_api_error_message = true` or `model = '<synthetic>'`) were never priced, so they have `cost_usd = NULL` and `SUM(cost_usd)` skips them automatically.
 
 ```sql
 -- Total cost, correctly
@@ -84,12 +84,14 @@ One `entries` row can fan out to multiple child rows:
 | `attachment_diagnostics_files` | diagnostics files referenced in an attachment entry |
 | `attachment_invoked_skills` | skills invoked via an attachment entry — multiple skills can share one `entry_id` (batch-loaded at session start or on demand). `position` orders them; `invocation_metadata` is JSON and may be empty. |
 
-### Views
+### Views and derived tables
 
-| View | Use for |
-|------|---------|
-| `assistant_entries_deduped` | billing-safe cost/token aggregation. Same columns as `assistant_entries`, one row per `(file_path, message_id)`. |
-| `tool_uses` | flat tool-call rows pulled from `assistant_content_blocks` where `block_type='tool_use'`. Exposes `name`, `tool_use_id`, `input` (JSON), plus convenience columns `effective_path`, `file_ext`, `input_command`, `input_path`, `input_file_path`, `input_notebook_path`, `caller_type`. Prefer this over parsing content blocks by hand. |
+| Name | Kind | Use for |
+|------|------|---------|
+| `assistant_entries_deduped` | table (materialized at ingest) | billing-safe cost/token aggregation. Same columns as `assistant_entries`, one row per `(file_path, message_id)`. Indexed on `entry_id` and `message_id`. |
+| `tool_uses` | view | flat tool-call rows pulled from `assistant_content_blocks` where `block_type='tool_use'`. Exposes `name`, `tool_use_id`, `input` (JSON), plus convenience columns `effective_path`, `file_ext`, `input_command`, `input_path`, `input_file_path`, `input_notebook_path`, `caller_type`. Prefer this over parsing content blocks by hand. |
+
+`assistant_entries_deduped` was a VIEW until the dedup window function dominated dashboard latency; it is now materialized into a real table during ingest. The schema and dedup rule are unchanged, but introspection via `duckdb_views()` no longer lists it — use `duckdb_tables()` or `SHOW TABLES`.
 
 ### Schema comment notation
 
