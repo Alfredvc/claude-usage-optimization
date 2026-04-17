@@ -189,7 +189,11 @@ CREATE TABLE IF NOT EXISTS attachment_entries (
     mcp_removed_names           JSON,
     ultrathink_level            TEXT,
     queued_command_prompt       TEXT,
-    queued_command_mode         TEXT
+    queued_command_mode         TEXT,
+    nested_memory_path              TEXT,
+    nested_memory_memory_type       TEXT,
+    nested_memory_content           TEXT,
+    nested_memory_differs_from_disk BOOLEAN
 );
 
 CREATE TABLE IF NOT EXISTS progress_entries (

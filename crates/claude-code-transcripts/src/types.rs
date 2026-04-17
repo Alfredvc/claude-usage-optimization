@@ -817,9 +817,31 @@ pub enum AttachmentData {
         command_mode: Option<String>,
     },
 
+    // ── Nested memory (CLAUDE.md imports) ────────────────────────────────
+    NestedMemory {
+        path: String,
+        content: NestedMemoryContent,
+        #[serde(rename = "displayPath")]
+        display_path: String,
+    },
+
     /// Catch-all for attachment types not yet recognised by the ingest binary.
     #[serde(other)]
     Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NestedMemoryContent {
+    pub path: String,
+    /// CLAUDE.md scope ("Project", "User", "Local", etc).
+    #[serde(rename = "type")]
+    pub memory_type: String,
+    pub content: String,
+    #[serde(
+        rename = "contentDiffersFromDisk",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub content_differs_from_disk: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1257,9 +1279,29 @@ mod tests {
 
     #[test]
     fn attachment_data_unknown_variant() {
-        let json = r#"{"type":"nested_memory","some_field":42}"#;
+        let json = r#"{"type":"future_attachment_shape","some_field":42}"#;
         let v: AttachmentData = serde_json::from_str(json).unwrap();
         assert!(matches!(v, AttachmentData::Unknown));
+    }
+
+    #[test]
+    fn attachment_data_nested_memory_variant() {
+        let json = r#"{"type":"nested_memory","path":"/p/CLAUDE.md","content":{"path":"/p/CLAUDE.md","type":"Project","content":"hi","contentDiffersFromDisk":false},"displayPath":"CLAUDE.md"}"#;
+        let v: AttachmentData = serde_json::from_str(json).unwrap();
+        match v {
+            AttachmentData::NestedMemory {
+                path,
+                content,
+                display_path,
+            } => {
+                assert_eq!(path, "/p/CLAUDE.md");
+                assert_eq!(content.memory_type, "Project");
+                assert_eq!(content.content, "hi");
+                assert_eq!(content.content_differs_from_disk, Some(false));
+                assert_eq!(display_path, "CLAUDE.md");
+            }
+            other => panic!("expected NestedMemory, got {other:?}"),
+        }
     }
 
     #[test]

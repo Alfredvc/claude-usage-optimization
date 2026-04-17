@@ -1057,7 +1057,7 @@ fn build_attachment(
 ) -> BuiltRows {
     use AttachmentData::*;
     // Initialise wide row as all NULL then fill the relevant slots.
-    let mut row: Vec<Value> = vec![Value::Null; 43];
+    let mut row: Vec<Value> = vec![Value::Null; 47];
     // index 0 = entry_id placeholder, index 1 = attachment_type
     let mut diag_rows: Vec<Vec<Value>> = Vec::new();
     let mut skill_rows: Vec<Vec<Value>> = Vec::new();
@@ -1086,6 +1086,7 @@ fn build_attachment(
         McpInstructionsDelta { .. } => "mcp_instructions_delta",
         UltrathinkEffort { .. } => "ultrathink_effort",
         QueuedCommand { .. } => "queued_command",
+        NestedMemory { .. } => "nested_memory",
         Unknown => "unknown",
     };
     row[1] = s_str(attach_type);
@@ -1103,7 +1104,8 @@ fn build_attachment(
     // 33 date_change_new_date, 34 deferred_added_names, 35 deferred_added_lines,
     // 36 deferred_removed_names, 37 mcp_added_names, 38 mcp_added_blocks,
     // 39 mcp_removed_names, 40 ultrathink_level, 41 queued_command_prompt,
-    // 42 queued_command_mode
+    // 42 queued_command_mode, 43 nested_memory_path, 44 nested_memory_memory_type,
+    // 45 nested_memory_content, 46 nested_memory_differs_from_disk
 
     let fill_hook = |row: &mut Vec<Value>,
                      h: &claude_code_transcripts::types::HookResultAttachment| {
@@ -1287,6 +1289,20 @@ fn build_attachment(
             row[41] = s_str(prompt);
             row[42] = s(command_mode.clone());
         }
+        NestedMemory {
+            path,
+            content,
+            display_path,
+        } => {
+            row[15] = s_str(display_path);
+            row[43] = s_str(path);
+            row[44] = s_str(&content.memory_type);
+            row[45] = s_str(&content.content);
+            row[46] = match content.content_differs_from_disk {
+                Some(v) => b(v),
+                None => Value::Null,
+            };
+        }
         Unknown => {
             unknown_variants.push("AttachmentData".to_string());
         }
@@ -1374,7 +1390,7 @@ mod tests {
     #[test]
     fn unknown_attachment_type_is_dropped_not_failed() {
         let line = format!(
-            r#"{{"type":"attachment","uuid":"a1",{ENVELOPE},"attachment":{{"type":"nested_memory","payload":"foo"}}}}"#
+            r#"{{"type":"attachment","uuid":"a1",{ENVELOPE},"attachment":{{"type":"future_attachment_shape","payload":"foo"}}}}"#
         );
         let tmp = TempJsonl::new(&line);
         let parsed = parse_file(&tmp.0, &HashMap::new());
@@ -1485,17 +1501,43 @@ mod tests {
     }
 
     /// Regression: the exact variant that caused the original bug report.
+    /// Ensures nested_memory parses into the typed variant and emits an
+    /// attachment_entries row (not dropped as Unknown).
     #[test]
     fn nested_memory_attachment_regression() {
         let line = format!(
-            r#"{{"type":"attachment","uuid":"f1",{ENVELOPE},"attachment":{{"type":"nested_memory","data":"anything"}}}}"#
+            r#"{{"type":"attachment","uuid":"f1",{ENVELOPE},"attachment":{{"type":"nested_memory","path":"/p/CLAUDE.md","content":{{"path":"/p/CLAUDE.md","type":"Project","content":"body","contentDiffersFromDisk":false}},"displayPath":"CLAUDE.md"}}}}"#
         );
         let tmp = TempJsonl::new(&line);
         let parsed = parse_file(&tmp.0, &HashMap::new());
 
         assert!(
             parsed.failures.is_empty(),
-            "nested_memory should not produce a parse failure"
+            "nested_memory should not produce a parse failure: {:?}",
+            parsed.failures
         );
+        assert!(
+            !parsed
+                .unknown_variants
+                .contains(&"AttachmentData".to_string()),
+            "nested_memory must not be reported as unknown: {:?}",
+            parsed.unknown_variants
+        );
+        assert_eq!(parsed.entries.len(), 1);
+        let e = &parsed.entries[0];
+        let (table, row) = e
+            .variant
+            .as_ref()
+            .expect("attachment variant row should be present");
+        assert_eq!(*table, "attachment_entries");
+        // attachment_type column
+        assert_eq!(row[1], serde_json::json!("nested_memory"));
+        // display_path (col 15), nested_memory_path (43), memory_type (44),
+        // content (45), differs_from_disk (46)
+        assert_eq!(row[15], serde_json::json!("CLAUDE.md"));
+        assert_eq!(row[43], serde_json::json!("/p/CLAUDE.md"));
+        assert_eq!(row[44], serde_json::json!("Project"));
+        assert_eq!(row[45], serde_json::json!("body"));
+        assert_eq!(row[46], serde_json::json!(false));
     }
 }
