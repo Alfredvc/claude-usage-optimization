@@ -76,7 +76,21 @@ The **Dashboard** tab shows a multi-panel cost breakdown split into two sub-tabs
 - **Outliers** — actionable panels: most-expensive turns, top sessions, context-size distribution, cache invalidation events, artifact leaderboards, file hotspots, and more.
 
 <p align="center">
-  <img src="docs/assets/transcripts.png" alt="cct serve transcripts" width="800" />
+  <img src="docs/assets/sessions.png" alt="Session list: filter by cost, project, tool, subagents" width="800" />
+  <br/>
+  <em>Session list — sortable by cost or time, filter on project, tool, model, subagents.</em>
+</p>
+
+<p align="center">
+  <img src="docs/assets/transcripts.png" alt="Session transcript: per-turn cost and tool timeline" width="800" />
+  <br/>
+  <em>Session view — per-turn cost, cache/token split, tool calls and thinking inline.</em>
+</p>
+
+<p align="center">
+  <img src="docs/assets/dashboard.png" alt="Dashboard: spend breakdown by model and time" width="800" />
+  <br/>
+  <em>Dashboard — daily spend by model, sessions/week, outlier turns.</em>
 </p>
 
 ## `cct` reference

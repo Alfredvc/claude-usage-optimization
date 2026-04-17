@@ -53,6 +53,12 @@ cct serve [--db <file>] [--port <n>]
 | `--db` | `~/.local/share/cct/transcripts.duckdb` (`$XDG_DATA_HOME/cct/transcripts.duckdb`) | DB file to serve |
 | `--port` | `8766` | Listen port |
 
+#### Sessions list
+
+Every session at a glance — cost, tokens, tools used, subagent flag. Filter by project, tool, model, or cost range; sort by most recent or highest spend.
+
+![cct serve sessions](https://raw.githubusercontent.com/alfredvc/claude-usage-optimization/main/docs/assets/sessions.png)
+
 #### Transcripts
 
 Browse by project → session → turn-by-turn timeline. Every assistant turn shows its exact cost: input, output, cache-read, and cache-creation tokens with the resulting dollar amount. Subagent calls expand inline so you can trace the full cost of any delegated task back to the turn that triggered it.
