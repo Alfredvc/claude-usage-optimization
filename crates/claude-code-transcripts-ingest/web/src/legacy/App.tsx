@@ -8,7 +8,7 @@ import ReactDOM from 'react-dom/client';
 (window as any).Recharts = Recharts;
 (window as any).ReactDOM = ReactDOM;
 
-const { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, AreaChart, Area } = window.Recharts || {};
+const { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, AreaChart, Area, ReferenceArea } = window.Recharts || {};
 
 // ── Pricing (USD / million tokens) — used for cost bar color breakdown only ──
 const PRICES = {
@@ -325,7 +325,9 @@ function SubagentCard({ item, sessionId, preloaded }) {
 }
 
 // ── CostChart ──────────────────────────────────────────────────────────────
-function CostChart({ apiItems }) {
+// `rangeNums` (optional): [start,end] API nums currently active as a filter.
+// `onRangeChange(start,end | null)`: commit a drag-selected range.
+function CostChart({ apiItems, rangeNums = null, onRangeChange = null }) {
   if (apiItems.length < 2) return null;
   if (!AreaChart) return null;
 
@@ -339,14 +341,18 @@ function CostChart({ apiItems }) {
         ? toolUses.map(tu => tu.name).join('+')
         : item.has_thinking ? 'Thinking' : 'Text';
       return { cum, delta, activity, num: i + 1, timelineIdx: item.timelineIdx,
+               entryId: item.entry_id ?? null,
                hasTool: toolUses.length > 0, hasThinking: item.has_thinking };
     });
   }, [apiItems]);
 
   const maxCum = points[points.length - 1].cum;
 
-  const scrollToItem = useCallback((timelineIdx) => {
-    const el = document.getElementById(`api-item-${timelineIdx}`);
+  const scrollToPoint = useCallback((payload) => {
+    if (!payload) return;
+    const el =
+      (payload.entryId != null && document.getElementById(`entry-${payload.entryId}`)) ||
+      document.getElementById(`api-item-${payload.timelineIdx}`);
     if (!el) return;
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     el.classList.remove('highlight-flash');
@@ -355,19 +361,63 @@ function CostChart({ apiItems }) {
     setTimeout(() => el.classList.remove('highlight-flash'), 15000);
   }, []);
 
+  const [dragStart, setDragStart] = useState(null);
+  const [dragEnd, setDragEnd] = useState(null);
+  const dragRef = useRef({ start: null, end: null });
+  dragRef.current = { start: dragStart, end: dragEnd };
+
+  const commitDrag = useCallback(() => {
+    const { start, end } = dragRef.current;
+    setDragStart(null);
+    setDragEnd(null);
+    if (start == null || end == null) return;
+    if (start === end) return; // click — let dot handler scroll instead
+    if (!onRangeChange) return;
+    const a = Math.min(start, end);
+    const b = Math.max(start, end);
+    if (a === 1 && b === points.length) onRangeChange(null, null);
+    else onRangeChange(a, b);
+  }, [onRangeChange, points.length]);
+
+  useEffect(() => {
+    if (dragStart == null) return;
+    const onUp = () => commitDrag();
+    document.addEventListener('mouseup', onUp);
+    return () => document.removeEventListener('mouseup', onUp);
+  }, [dragStart, commitDrag]);
+
+  const onChartMouseDown = useCallback((e) => {
+    if (!onRangeChange || !e || e.activeLabel == null) return;
+    const n = Number(e.activeLabel);
+    setDragStart(n);
+    setDragEnd(n);
+  }, [onRangeChange]);
+
+  const onChartMouseMove = useCallback((e) => {
+    if (dragStart == null || !e || e.activeLabel == null) return;
+    setDragEnd(Number(e.activeLabel));
+  }, [dragStart]);
+
+  const inRange = useCallback((num) => {
+    if (!rangeNums) return true;
+    return num >= rangeNums[0] && num <= rangeNums[1];
+  }, [rangeNums]);
+
   const CustomDot = useCallback((props) => {
     const { cx, cy, payload } = props;
     if (cx == null || cy == null) return null;
     const color = payload.hasTool ? '#7ee787' : payload.hasThinking ? '#d2a8ff' : '#58a6ff';
+    const dim = !inRange(payload.num);
     return (
       <circle
         cx={cx} cy={cy} r={4}
         fill={color}
+        opacity={dim ? 0.3 : 1}
         style={{ cursor: 'pointer' }}
-        onClick={() => scrollToItem(payload.timelineIdx)}
+        onClick={() => scrollToPoint(payload)}
       />
     );
-  }, [scrollToItem]);
+  }, [scrollToPoint, inRange]);
 
   const CustomTooltip = ({ active, payload }) => {
     if (!active || !payload?.length) return null;
@@ -376,13 +426,15 @@ function CostChart({ apiItems }) {
       <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 4, padding: '4px 8px', fontSize: 11, lineHeight: 1.5 }}>
         <div>API #{p.num}: <strong>+{fmtCost(p.delta)}</strong> → <strong>{fmtCost(p.cum)}</strong></div>
         <div style={{ color: 'var(--muted)' }}>{p.activity}</div>
-        <div style={{ color: 'var(--muted)', fontSize: 10 }}>click to scroll</div>
+        <div style={{ color: 'var(--muted)', fontSize: 10 }}>
+          {onRangeChange ? 'click: scroll · drag: select range' : 'click to scroll'}
+        </div>
       </div>
     );
   };
 
   return (
-    <div style={{ padding: '5px 16px 0', background: 'var(--surface2)', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
+    <div style={{ padding: '5px 16px 0', background: 'var(--surface2)', borderBottom: '1px solid var(--border)', flexShrink: 0, userSelect: dragStart != null ? 'none' : undefined }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontSize: 9, color: 'var(--muted)', marginBottom: 2 }}>
         <span>Cumulative cost · <strong style={{ color: '#7ee787' }}>{fmtCost(maxCum)}</strong></span>
         <span style={{ display: 'flex', gap: 8 }}>
@@ -390,16 +442,36 @@ function CostChart({ apiItems }) {
           <span><span style={{ color: '#d2a8ff' }}>●</span> think</span>
           <span><span style={{ color: '#58a6ff' }}>●</span> text</span>
         </span>
+        {rangeNums && (
+          <span style={{ marginLeft: 'auto', color: 'var(--accent)' }}>
+            range: API #{rangeNums[0]}–#{rangeNums[1]}
+            {onRangeChange && (
+              <button
+                onClick={() => onRangeChange(null, null)}
+                style={{ marginLeft: 6, background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 10, padding: 0, textDecoration: 'underline' }}
+              >
+                clear
+              </button>
+            )}
+          </span>
+        )}
       </div>
       <ResponsiveContainer width="100%" height={55}>
-        <AreaChart data={points} margin={{ top: 4, right: 4, left: 4, bottom: 4 }}>
+        <AreaChart
+          data={points}
+          margin={{ top: 4, right: 4, left: 4, bottom: 4 }}
+          onMouseDown={onChartMouseDown}
+          onMouseMove={onChartMouseMove}
+          onMouseUp={commitDrag}
+          style={{ cursor: onRangeChange ? 'crosshair' : undefined }}
+        >
           <defs>
             <linearGradient id="costGradient" x1="0" y1="0" x2="0" y2="1">
               <stop offset="5%" stopColor="var(--accent)" stopOpacity={0.15} />
               <stop offset="95%" stopColor="var(--accent)" stopOpacity={0} />
             </linearGradient>
           </defs>
-          <XAxis dataKey="num" hide />
+          <XAxis dataKey="num" hide type="number" domain={[1, points.length]} />
           <YAxis hide domain={[0, maxCum * 1.05]} />
           <Tooltip content={<CustomTooltip />} />
           <Area
@@ -409,9 +481,27 @@ function CostChart({ apiItems }) {
             strokeWidth={1.5}
             fill="url(#costGradient)"
             dot={<CustomDot />}
-            activeDot={{ r: 5, style: { cursor: 'pointer' }, onClick: (e, p) => scrollToItem(p.payload.timelineIdx) }}
+            activeDot={{ r: 5, style: { cursor: 'pointer' }, onClick: (_, p) => scrollToPoint(p.payload) }}
             isAnimationActive={false}
           />
+          {dragStart != null && dragEnd != null && dragStart !== dragEnd && (
+            <ReferenceArea
+              x1={Math.min(dragStart, dragEnd)}
+              x2={Math.max(dragStart, dragEnd)}
+              strokeOpacity={0}
+              fill="#58a6ff"
+              fillOpacity={0.22}
+            />
+          )}
+          {dragStart == null && rangeNums && (
+            <ReferenceArea
+              x1={rangeNums[0]}
+              x2={rangeNums[1]}
+              strokeOpacity={0}
+              fill="#58a6ff"
+              fillOpacity={0.1}
+            />
+          )}
         </AreaChart>
       </ResponsiveContainer>
     </div>

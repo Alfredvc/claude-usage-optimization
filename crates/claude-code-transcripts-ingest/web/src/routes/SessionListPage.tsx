@@ -327,7 +327,7 @@ export function SessionListPage() {
 function SessionCard({ session }: { session: SessionRow }) {
   const qs = new URLSearchParams();
   if (session.project) qs.set("project", session.project);
-  const to = `/transcripts/${encodeURIComponent(session.id)}?${qs.toString()}`;
+  const to = `/sessions/${encodeURIComponent(session.id)}?${qs.toString()}`;
   return (
     <Link to={to} className="sl-card">
       <div className="sl-card-head">

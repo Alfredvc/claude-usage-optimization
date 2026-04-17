@@ -32,7 +32,7 @@ export function DashboardPage() {
       const qs = new URLSearchParams();
       if (project) qs.set("project", project);
       if (entryId != null) qs.set("entry", String(entryId));
-      navigate(`/transcripts/${encodeURIComponent(sessionId)}?${qs}`);
+      navigate(`/sessions/${encodeURIComponent(sessionId)}?${qs}`);
     },
     [navigate],
   );

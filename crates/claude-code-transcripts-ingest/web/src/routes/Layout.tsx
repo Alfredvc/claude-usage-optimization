@@ -1,6 +1,13 @@
-import { NavLink, Outlet } from "react-router-dom";
+import { ReactNode, useState } from "react";
+import { NavLink, Outlet, useOutletContext } from "react-router-dom";
+
+type LayoutContext = {
+  setNavExtras: (node: ReactNode) => void;
+};
 
 export function Layout() {
+  const [navExtras, setNavExtras] = useState<ReactNode>(null);
+
   return (
     <>
       <div className="header">
@@ -12,14 +19,19 @@ export function Layout() {
             Dashboard
           </NavLink>
           <NavLink
-            to="/transcripts"
+            to="/sessions"
             className={({ isActive }) => `tab-btn ${isActive ? "active" : ""}`}
           >
-            Transcripts
+            Sessions
           </NavLink>
         </div>
+        {navExtras && <div className="nav-extras">{navExtras}</div>}
       </div>
-      <Outlet />
+      <Outlet context={{ setNavExtras } satisfies LayoutContext} />
     </>
   );
+}
+
+export function useLayoutContext(): LayoutContext {
+  return useOutletContext<LayoutContext>();
 }

@@ -51,6 +51,11 @@
   color: #fff;
 }
 
+.msp-chip.model {
+  background: #8957e5;
+  color: #fff;
+}
+
 .msp-chip-x {
   background: rgba(0, 0, 0, 0.2);
   color: inherit;
