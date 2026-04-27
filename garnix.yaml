@@ -1,0 +1,20 @@
+builds:
+  include:
+    - "checks.x86_64-linux.*"
+    - "checks.aarch64-linux.*"
+    - "checks.x86_64-darwin.*"
+    - "checks.aarch64-darwin.*"
+    - "devShells.x86_64-linux.default"
+    - "devShells.aarch64-linux.default"
+    - "devShells.x86_64-darwin.default"
+    - "devShells.aarch64-darwin.default"
+  exclude: []
+
+actions:
+  # Runs `cargo test --workspace`. Wired as an Action (not a sandbox check)
+  # because claude-code-transcripts-ingest's build.rs invokes `npm ci` to
+  # build the embedded React viewer, which needs network access. duckdb-bundled
+  # compiles its vendored C++ tree from inside the action runner.
+  - on: push
+    run: cargo-test
+    withRepoContents: true

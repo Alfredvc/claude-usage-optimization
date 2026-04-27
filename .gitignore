@@ -10,3 +10,7 @@ out/
 .playwright-cli/
 scripts/
 skills-lock.json
+
+# Nix
+/result
+/result-*
