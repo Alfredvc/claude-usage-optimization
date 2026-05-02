@@ -108,13 +108,13 @@ The `Entry::LastPrompt` variant on the top-level `Entry` enum at `types.rs:31-32
 ```sql
 CREATE TABLE IF NOT EXISTS last_prompt_entries (
     entry_id    BIGINT,
-    last_prompt TEXT,    -- inline text from old-format rows; NULL for new format
     leaf_uuid   TEXT,    -- pointer to entries.uuid for new-format rows; NULL for old format
+    last_prompt TEXT,    -- inline text from old-format rows; NULL for new format
     session_id  TEXT
 );
 ```
 
-Adds `leaf_uuid TEXT`. The existing DDL already declared `last_prompt TEXT` without `NOT NULL` (verified at `schema.rs:297`); only the Rust struct enforced non-null at parse time. No `ALTER COLUMN` is needed. No view is created.
+Adds `leaf_uuid TEXT`. Column order mirrors the existing `summary_entries(entry_id, leaf_uuid, summary, session_id)` precedent at `schema.rs:337-342`, which already uses `leaf_uuid` in the same position. The existing DDL already declared `last_prompt TEXT` without `NOT NULL` (verified at `schema.rs:297`); only the Rust struct enforced non-null at parse time. No `ALTER COLUMN` is needed. No view is created.
 
 The unique index at `schema.rs:538` (`uq_last_prompt_entries_pk ON last_prompt_entries(entry_id)`) is unchanged.
 
@@ -122,8 +122,10 @@ The column comment at `schema.rs:609` (`COMMENT ON COLUMN last_prompt_entries.en
 
 ```sql
 COMMENT ON COLUMN last_prompt_entries.last_prompt IS 'Inline literal user-typed prompt text (old Claude Code format). NULL for new-format rows; new format stores leaf_uuid only.';
-COMMENT ON COLUMN last_prompt_entries.leaf_uuid   IS '→ entries(uuid). Conversation-tree leaf at session-save (new Claude Code format). NULL for old-format rows. Does not point at the prompt-text entry.';
+COMMENT ON COLUMN last_prompt_entries.leaf_uuid   IS '~ entries(uuid). Conversation-tree leaf at session-save (new Claude Code format). NULL for old-format rows. Does not point at the prompt-text entry. Soft reference: entries(uuid) is non-unique across resumed sessions, so joins are 1:N.';
 ```
+
+The `~` notation marks this as a soft / non-unique reference per the schema's documented arrow legend at `schema.rs:583-586`. Using `→` would be wrong: `→` means "every row in this table has exactly one matching row in the target", and resumed-session UUID replay (~22k duplicate `(uuid, session_id)` pairs in the user's current corpus, see Empirical Findings) breaks that contract.
 
 The schema header docstring at `schema.rs:1-7` does not need changes — there is no view, no recursive CTE, no resolution semantics. The columns speak for themselves.
 
@@ -132,21 +134,32 @@ The schema header docstring at `schema.rs:1-7` does not need changes — there i
 `crates/claude-code-transcripts-ingest/src/parse.rs:468-474`:
 
 ```rust
-Entry::LastPrompt(x) => Ok((
-    Some((
-        "last_prompt_entries",
-        vec![
-            Value::Null,
-            x.last_prompt.as_deref().map_or(Value::Null, s_str),
-            x.leaf_uuid.as_deref().map_or(Value::Null, s_str),
-            s_str(&x.session_id),
-        ],
-    )),
-    vec![],
-)),
+Entry::LastPrompt(x) => {
+    if x.last_prompt.is_none() && x.leaf_uuid.is_none() {
+        // Observability: a `last-prompt` row with neither field signals a
+        // possible Claude Code format change (e.g. renamed discriminator).
+        // Surfaces in ingest's existing `unknown_variants` log so a future
+        // format break is loud, not silent.
+        unknown_variants.push("last-prompt:no-fields".to_string());
+    }
+    Ok((
+        Some((
+            "last_prompt_entries",
+            vec![
+                Value::Null,
+                x.leaf_uuid.as_deref().map_or(Value::Null, s_str),
+                x.last_prompt.as_deref().map_or(Value::Null, s_str),
+                s_str(&x.session_id),
+            ],
+        )),
+        vec![],
+    ))
+}
 ```
 
-Insert path gains the `leaf_uuid` value column. The DuckDB `Appender` API is positional (verified at `run.rs:21,439-440`), so the vec order must match the schema column order `(entry_id, last_prompt, leaf_uuid, session_id)` — it does.
+Insert path gains the `leaf_uuid` value column. Vec order matches the schema column order `(entry_id, leaf_uuid, last_prompt, session_id)`. The `Value::Null` placeholder for `entry_id` follows the existing convention for variant tables (cf. `parse.rs:464` for `permission_mode_entries`); the writer pipeline assigns the actual `entry_id` later. The DuckDB `Appender` API is positional (verified at `run.rs:21,439-440`), so vec order is the contract.
+
+The all-fields-NULL signal piggybacks on the existing `unknown_variants: Vec<String>` that the parser already threads through (verified at `parse.rs:45,182,448`). One push per occurrence; the existing aggregation surfaces the count in the ingest summary log, giving observability for the next format break without aborting ingest.
 
 ### 4. Demo build script
 
@@ -166,7 +179,7 @@ SELECT entry_id, fakepara(last_prompt) AS last_prompt, leaf_uuid, session_id
 FROM src.last_prompt_entries WHERE entry_id IN (SELECT entry_id FROM keep_entries);
 ```
 
-`fakepara` already handles NULL inputs (it returns NULL); no per-row branching needed.
+`fakepara` handles NULL inputs explicitly — verified at `scripts/demo/build.sh:78` (`WHEN orig IS NULL THEN NULL`). No per-row branching needed.
 
 ### 5. Migration
 
@@ -202,19 +215,31 @@ Verification procedure for "no skill changes": `grep -rn 'last_prompt' skills/ d
 - **Ad-hoc queries assume non-NULL `last_prompt`.** Surveyed: no skill SQL references the column. The risk is limited to user-written ad-hoc queries (e.g. `WHERE last_prompt LIKE '%foo%'` silently drops new-format rows). Mitigated by (a) the column comment documenting the new semantics, and (b) a one-line note added to `skills/claude-usage-db/SKILL.md` so the skill description matches reality.
 - **Users want recovered text for new-format rows.** Deferred: not faithful, see "Non-goals". If a future need arises, the right place is a separate, explicitly-named convenience view or materialized column that documents its derivation. Not part of this change.
 
+## Test infrastructure
+
+The implementation must provision the test harness. Two layers, both CI-runnable via `cargo test`:
+
+**Parser layer** — unit test in `crates/claude-code-transcripts/src/types.rs` (or a sibling `tests.rs` module) exercising `serde_json::from_str::<Entry>` on each of the four behavior-matrix line shapes and asserting the resulting `Entry::LastPrompt(LastPromptEntry)` field values. Uses existing `serde_json` dependency; no new dev-deps. Covers the original parse-error fix.
+
+**Schema/appender layer** — integration test at `crates/claude-code-transcripts-ingest/tests/last_prompt_format.rs`. Adds a fixture file `crates/claude-code-transcripts-ingest/tests/fixtures/last_prompt_formats.jsonl` containing four `last-prompt` lines covering the behavior matrix, plus the minimal envelope needed by the ingest pipeline (a `transcripts` parent record if required). The test invokes the ingest pipeline programmatically (the simplest viable entry point: refactor or expose a callable function from `run.rs` that takes an input directory and an output `Path`; if `run::run` is not currently callable from a test, this refactor is part of the implementation work). Then opens the resulting DuckDB and asserts the rows. New dev-dependency: `tempfile` (workspace-add). No `assert_cmd` / external-process invocation.
+
+If exposing `run::run` for test-callability adds significant churn, fall back to a smaller integration test that builds an in-memory DuckDB, runs the schema bootstrap SQL, calls the parser's row-builder directly, appends the four rows, and queries — bypassing the file-discovery layer. This still covers schema↔parser column ordering, which is the highest-risk wiring.
+
 ## Acceptance criteria
 
-A fixture file `crates/claude-code-transcripts-ingest/tests/fixtures/last_prompt_formats.jsonl` is added containing exactly four `last-prompt` lines covering the four cases in the behavior matrix. Criteria 2-5 below are bound to that fixture so they are CI-runnable, not dependent on the author's machine state.
-
-1. **Real-corpus smoke test (manual, non-blocking):** `cct ingest ~/.claude/projects/` completes with exit code 0 on the maintainer's machine. Reproducible only at the moment of merge; not a regression test.
-2. **Old-format pass-through (fixture):** `SELECT last_prompt, leaf_uuid FROM last_prompt_entries WHERE session_id='S1'` returns exactly `('hello world', NULL)`.
-3. **New-format pass-through (fixture):** `SELECT last_prompt, leaf_uuid FROM last_prompt_entries WHERE session_id='S2'` returns exactly `(NULL, 'u1')`.
-4. **Hypothetical-both pass-through (fixture):** for a row with both fields set, returns both values; for a row with neither, returns `(NULL, NULL)`.
-5. **Fixture row-count parity:** `SELECT COUNT(*) FROM last_prompt_entries` equals 4 on the fixture.
-6. **Existing column-shape queries don't error:** `SELECT entry_id, last_prompt, session_id FROM last_prompt_entries LIMIT 10` parses and returns rows on the user's corpus without error, producing NULL for `last_prompt` on new-format rows.
-7. **Demo build:** `scripts/demo/build.sh` runs to completion against a database built with the new schema, and the resulting demo `last_prompt_entries` table contains the `leaf_uuid` column with values pass-through-equal to the source.
-8. **Skill survey at merge time:** `grep -rn 'last_prompt' skills/ docs/` produces no occurrence whose SQL example breaks. Run any SQL example that appears. Note: this is a one-time check at merge; future skill authors are responsible for honoring the documented NULL-on-new-format contract.
-9. **No new clippy / build warnings** introduced by the type or parser changes.
+1. **Real-corpus smoke (manual, non-blocking):** `cct ingest ~/.claude/projects/` completes with exit code 0 on the maintainer's machine. Confirms the originally-reported bug is fixed against live data. Not a merge gate; included as a maintainer checklist item only.
+2. **Parser-layer test passes (CI):** unit test in `crates/claude-code-transcripts/` parses each of the four fixture-line shapes and asserts the corresponding `LastPromptEntry` field values match the behavior matrix.
+3. **Schema/appender-layer test passes (CI):** integration test in `crates/claude-code-transcripts-ingest/tests/last_prompt_format.rs` ingests the fixture file and asserts:
+   - row 1 (old format): `(last_prompt, leaf_uuid) = ('hello world', NULL)`
+   - row 2 (new format): `(last_prompt, leaf_uuid) = (NULL, 'u1')`
+   - row 3 (hypothetical both): `(last_prompt, leaf_uuid) = ('inline', 'u2')`
+   - row 4 (hypothetical neither): `(last_prompt, leaf_uuid) = (NULL, NULL)`
+   - `SELECT COUNT(*) FROM last_prompt_entries` returns 4
+4. **All-NULL observability (CI):** the integration test also asserts that ingesting row 4 increments the `unknown_variants["last-prompt:no-fields"]` counter (or equivalent observable signal) by exactly 1.
+5. **Existing column-shape queries don't error (manual):** `SELECT entry_id, last_prompt, session_id FROM last_prompt_entries LIMIT 10` parses and returns rows on the user's corpus, producing NULL for `last_prompt` on new-format rows. Captured as part of criterion 1.
+6. **Demo build (manual):** `scripts/demo/build.sh` runs to completion against a database built with the new schema; the resulting demo `last_prompt_entries` table contains the `leaf_uuid` column and pass-through values match the source.
+7. **Skill survey at merge time (manual):** for every occurrence of `last_prompt` returned by `grep -rn 'last_prompt' skills/ docs/`, any embedded SQL example runs without DuckDB parser/binder error against the user's `transcripts.duckdb`. Documentation prose passes by inspection. This is a one-time check at merge; future skill authors honor the documented NULL-on-new-format contract.
+8. **No new clippy / build warnings** introduced by the type or parser changes.
 
 ## Out of scope
 
