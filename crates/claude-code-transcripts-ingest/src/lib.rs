@@ -8,3 +8,4 @@ pub mod run;
 pub mod schema;
 pub mod serve;
 pub mod update;
+pub mod version_check;
