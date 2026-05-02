@@ -33,6 +33,8 @@ curl -fsSL https://raw.githubusercontent.com/Alfredvc/claude-usage-optimization/
 
 Downloads the latest prebuilt `cct` binary into `~/.local/bin`. Override with `CCT_INSTALL_DIR=/some/dir` or pin a version with `CCT_VERSION=v0.2.0`. Source: [`crates/claude-code-transcripts-ingest/`](crates/claude-code-transcripts-ingest/).
 
+After install, upgrade in place with `cct update` (or `cct update --version v0.2.0` to pin).
+
 ### 3. DuckDB CLI (required)
 
 Skills query the DB via the `duckdb` CLI. Install from [duckdb.org](https://duckdb.org/install/?platform=macos&environment=cli) or:

@@ -7,3 +7,4 @@ pub mod pricing;
 pub mod run;
 pub mod schema;
 pub mod serve;
+pub mod update;

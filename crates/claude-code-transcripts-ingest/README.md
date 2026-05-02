@@ -110,6 +110,14 @@ Prints the DB path, file size, entry count, session count, and last ingest times
 |---|---|---|
 | `--db` | `~/.local/share/cct/transcripts.duckdb` (`$XDG_DATA_HOME/cct/transcripts.duckdb`) | DB file to inspect |
 
+### `cct update`
+
+```
+cct update [--version <vX.Y.Z>] [-y|--yes]
+```
+
+Self-updates the running `cct` binary from the latest GitHub release for the current OS/arch. Pass `--version` to install or pin a specific version. Pass `-y` to skip the confirmation prompt.
+
 Run `cct --help` / `cct <subcommand> --help` for the authoritative flag list.
 
 ## Library

@@ -42,6 +42,8 @@ pub enum Command {
     Serve(ServeArgs),
     /// Show DB path, size, and entry counts
     Info(InfoArgs),
+    /// Update cct to the latest GitHub release (or a specific version)
+    Update(UpdateArgs),
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -83,4 +85,15 @@ pub struct InfoArgs {
     /// DuckDB database file to inspect.
     #[arg(long = "db", default_value_os_t = default_output_db())]
     pub db: PathBuf,
+}
+
+#[derive(Parser, Debug)]
+pub struct UpdateArgs {
+    /// Specific release version to install (e.g. 0.2.0 or v0.2.0). Defaults to latest.
+    #[arg(long = "version")]
+    pub version: Option<String>,
+
+    /// Skip the interactive confirmation prompt.
+    #[arg(short = 'y', long = "yes")]
+    pub yes: bool,
 }
