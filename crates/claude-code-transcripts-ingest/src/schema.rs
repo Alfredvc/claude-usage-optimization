@@ -608,8 +608,13 @@ COMMENT ON COLUMN attachment_invoked_skills.entry_id        IS '→ entries(entr
 -- ── metadata variant tables → entries (1:1) ──────────────────────────────
 COMMENT ON COLUMN permission_mode_entries.entry_id          IS '→ entries(entry_id)';
 COMMENT ON COLUMN last_prompt_entries.entry_id              IS '→ entries(entry_id)';
-COMMENT ON COLUMN last_prompt_entries.last_prompt           IS 'Inline literal user-typed prompt text (old Claude Code format). NULL for new-format rows; new format stores leaf_uuid only.';
-COMMENT ON COLUMN last_prompt_entries.leaf_uuid             IS '~ entries(uuid). Conversation-tree leaf at session-save (new Claude Code format). NULL for old-format rows. Does not point at the prompt-text entry. Soft reference: entries(uuid) is non-unique across resumed sessions, so joins are 1:N.';
+COMMENT ON COLUMN last_prompt_entries.last_prompt           IS
+    'Inline literal user-typed prompt text (old Claude Code format).
+NULL for new-format rows; new format stores leaf_uuid only.';
+COMMENT ON COLUMN last_prompt_entries.leaf_uuid             IS
+    '~ entries(uuid). Conversation-tree leaf at session-save (new Claude Code format).
+NULL for old-format rows. Does not point at the prompt-text entry.
+Soft reference: entries(uuid) is non-unique across resumed sessions, so joins are 1:N.';
 COMMENT ON COLUMN ai_title_entries.entry_id                 IS '→ entries(entry_id)';
 COMMENT ON COLUMN custom_title_entries.entry_id             IS '→ entries(entry_id)';
 COMMENT ON COLUMN agent_name_entries.entry_id               IS '→ entries(entry_id)';

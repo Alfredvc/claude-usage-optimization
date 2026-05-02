@@ -30,15 +30,18 @@ use crate::schema::{
     COMMENTS_DDL, DEDUPED_TABLE_DDL, INDEXES_DDL, PK_DDL, SCHEMA_DDL, TOOL_USES_VIEW_DDL,
 };
 
-/// Summary returned by [`run_ingest`]. Fields are read by integration tests
-/// (Task 5); the `allow(dead_code)` suppresses the lint until that crate
-/// is wired up.
-#[allow(dead_code)]
+/// Summary returned by [`run_ingest`]. `unknown_variants` is read by the
+/// integration test for the `last-prompt:no-fields` counter; the other three
+/// fields are populated for future test/observability use and currently
+/// unread, hence the field-level `allow(dead_code)`.
 #[derive(Debug, Default, Clone)]
 pub struct RunSummary {
+    #[allow(dead_code)]
     pub files_processed: usize,
+    #[allow(dead_code)]
     pub entry_counts: HashMap<String, u64>,
     pub unknown_variants: HashMap<String, u64>,
+    #[allow(dead_code)]
     pub unknown_models: HashMap<String, u64>,
 }
 
