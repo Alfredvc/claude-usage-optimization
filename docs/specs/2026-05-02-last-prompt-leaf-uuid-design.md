@@ -97,7 +97,7 @@ pub struct LastPromptEntry {
 }
 ```
 
-Both fields optional. Serde's `rename_all = "camelCase"` maps them to `lastPrompt` and `leafUuid` respectively. An entry with neither field still parses (forward-compatible against further format evolution); both columns become NULL in the DB row, which is faithful.
+Both fields optional. Serde's `rename_all = "camelCase"` maps them to `lastPrompt` and `leafUuid` respectively. An entry with neither field still parses; both columns become NULL in the DB row, which is faithful. This tolerates new optional fields being added in future Claude Code versions, but does **not** automatically interpret a future required discriminator (e.g. a `kind` field): such a change would still need explicit type-level support.
 
 The `Entry::LastPrompt` variant on the top-level `Entry` enum at `types.rs:31-32` does not change.
 
@@ -114,7 +114,7 @@ CREATE TABLE IF NOT EXISTS last_prompt_entries (
 );
 ```
 
-Adds `leaf_uuid TEXT`. `last_prompt` becomes effectively nullable in practice (the column is already typed as nullable; only the Rust struct enforced non-null at parse time). No view is created.
+Adds `leaf_uuid TEXT`. The existing DDL already declared `last_prompt TEXT` without `NOT NULL` (verified at `schema.rs:297`); only the Rust struct enforced non-null at parse time. No `ALTER COLUMN` is needed. No view is created.
 
 The unique index at `schema.rs:538` (`uq_last_prompt_entries_pk ON last_prompt_entries(entry_id)`) is unchanged.
 
@@ -146,7 +146,7 @@ Entry::LastPrompt(x) => Ok((
 )),
 ```
 
-Insert path gains the `leaf_uuid` value column.
+Insert path gains the `leaf_uuid` value column. The DuckDB `Appender` API is positional (verified at `run.rs:21,439-440`), so the vec order must match the schema column order `(entry_id, last_prompt, leaf_uuid, session_id)` — it does.
 
 ### 4. Demo build script
 
@@ -158,7 +158,7 @@ SELECT entry_id, fakepara(last_prompt) AS last_prompt, session_id
 FROM src.last_prompt_entries WHERE entry_id IN (SELECT entry_id FROM keep_entries);
 ```
 
-Update to also project `leaf_uuid` (no scrubbing needed — UUIDs are not sensitive):
+Update to also project `leaf_uuid` unchanged. This is consistent with the demo's existing UUID handling: `entries.uuid` is passed through at `build.sh:136`, and `summary_entries.leaf_uuid` is passed through at `build.sh:440`. The demo's threat model already accepts UUID exposure (UUIDs allow correlation of session structure across snapshots, but no PII content). Pass-through preserves the implicit `leaf_uuid → entries(uuid)` reference within the demo DB; remapping would dangle.
 
 ```bash
 CREATE TABLE last_prompt_entries AS
@@ -192,26 +192,28 @@ NULL is now a possible value for `last_prompt`. The old physical column was alwa
 | Schema | `crates/.../schema.rs:295-299` | Yes — add `leaf_uuid TEXT` column |
 | Schema column comments | `crates/.../schema.rs:609` | Yes — add two new `COMMENT ON COLUMN` |
 | Demo build | `scripts/demo/build.sh:409-411` | Yes — project `leaf_uuid` |
-| Skill (claude-usage-db) | `skills/claude-usage-db/SKILL.md:64` | No (only mentions table name in variant list) |
+| Skill (claude-usage-db) | `skills/claude-usage-db/SKILL.md:64` | Yes — add a one-line note that `last_prompt` is NULL for new-format rows and `leaf_uuid` joins to `entries(uuid)` |
 | Skill (optimize-usage) | `skills/optimize-usage/**` | No (no references) |
 
 Verification procedure for "no skill changes": `grep -rn 'last_prompt' skills/ docs/` and confirm each occurrence is documentation prose or a SQL example whose result shape is preserved (column tuple `(entry_id, last_prompt, session_id)` is still a valid `SELECT` against the table; the table just has one extra column that the existing queries don't reference).
 
 ## Risks
 
-- **Skills assume non-NULL `last_prompt`.** Surveyed: no skill SQL references the column. The risk is theoretical for now and limited to user-written ad-hoc queries. The column comment documents the new semantics so a reader of the schema discovers the change.
+- **Ad-hoc queries assume non-NULL `last_prompt`.** Surveyed: no skill SQL references the column. The risk is limited to user-written ad-hoc queries (e.g. `WHERE last_prompt LIKE '%foo%'` silently drops new-format rows). Mitigated by (a) the column comment documenting the new semantics, and (b) a one-line note added to `skills/claude-usage-db/SKILL.md` so the skill description matches reality.
 - **Users want recovered text for new-format rows.** Deferred: not faithful, see "Non-goals". If a future need arises, the right place is a separate, explicitly-named convenience view or materialized column that documents its derivation. Not part of this change.
 
 ## Acceptance criteria
 
-1. `cct ingest` completes without error on the user's full `~/.claude/projects/` directory containing both old- and new-format `last-prompt` rows.
-2. **Old-format pass-through:** given a fixture with `{"type":"last-prompt","lastPrompt":"hello world","sessionId":"S1"}`, `SELECT last_prompt, leaf_uuid FROM last_prompt_entries WHERE session_id='S1'` returns exactly `('hello world', NULL)`.
-3. **New-format pass-through:** given `{"type":"last-prompt","leafUuid":"u1","sessionId":"S2"}`, the same query returns exactly `(NULL, 'u1')`.
-4. **Hypothetical-both pass-through:** given a row with both fields, returns both values; given a row with neither, returns `(NULL, NULL)`.
-5. **Row count parity:** the count of `last_prompt_entries` rows after ingest equals the count of `"type":"last-prompt"` lines across all input JSONL files.
-6. **Existing queries don't error:** `SELECT entry_id, last_prompt, session_id FROM last_prompt_entries LIMIT 10` returns 10 rows on the user's corpus without error and produces NULL for `last_prompt` on new-format rows.
-7. **Demo build:** `scripts/demo/build.sh` runs to completion against a database built with the new schema, and the resulting demo `last_prompt_entries` table contains the `leaf_uuid` column.
-8. **Skill survey clean:** `grep -rn 'last_prompt' skills/ docs/` produces no occurrence whose SQL example breaks. (Run any SQL example that appears.)
+A fixture file `crates/claude-code-transcripts-ingest/tests/fixtures/last_prompt_formats.jsonl` is added containing exactly four `last-prompt` lines covering the four cases in the behavior matrix. Criteria 2-5 below are bound to that fixture so they are CI-runnable, not dependent on the author's machine state.
+
+1. **Real-corpus smoke test (manual, non-blocking):** `cct ingest ~/.claude/projects/` completes with exit code 0 on the maintainer's machine. Reproducible only at the moment of merge; not a regression test.
+2. **Old-format pass-through (fixture):** `SELECT last_prompt, leaf_uuid FROM last_prompt_entries WHERE session_id='S1'` returns exactly `('hello world', NULL)`.
+3. **New-format pass-through (fixture):** `SELECT last_prompt, leaf_uuid FROM last_prompt_entries WHERE session_id='S2'` returns exactly `(NULL, 'u1')`.
+4. **Hypothetical-both pass-through (fixture):** for a row with both fields set, returns both values; for a row with neither, returns `(NULL, NULL)`.
+5. **Fixture row-count parity:** `SELECT COUNT(*) FROM last_prompt_entries` equals 4 on the fixture.
+6. **Existing column-shape queries don't error:** `SELECT entry_id, last_prompt, session_id FROM last_prompt_entries LIMIT 10` parses and returns rows on the user's corpus without error, producing NULL for `last_prompt` on new-format rows.
+7. **Demo build:** `scripts/demo/build.sh` runs to completion against a database built with the new schema, and the resulting demo `last_prompt_entries` table contains the `leaf_uuid` column with values pass-through-equal to the source.
+8. **Skill survey at merge time:** `grep -rn 'last_prompt' skills/ docs/` produces no occurrence whose SQL example breaks. Run any SQL example that appears. Note: this is a one-time check at merge; future skill authors are responsible for honoring the documented NULL-on-new-format contract.
 9. **No new clippy / build warnings** introduced by the type or parser changes.
 
 ## Out of scope
