@@ -618,7 +618,8 @@ pub enum SystemSubtype {
 #[serde(rename_all = "camelCase")]
 pub struct HookInfo {
     pub command: String,
-    pub duration_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -812,7 +813,10 @@ pub enum AttachmentData {
 
     // ── Queued commands ──────────────────────────────────────────────────
     QueuedCommand {
-        prompt: String,
+        /// String for plain prompts, or array of content blocks (text/image)
+        /// for prompts that include attached images. Using Value because serde
+        /// cannot nest untagged enums inside an internally-tagged variant.
+        prompt: Value,
         #[serde(rename = "commandMode", skip_serializing_if = "Option::is_none")]
         command_mode: Option<String>,
     },

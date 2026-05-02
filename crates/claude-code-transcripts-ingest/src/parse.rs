@@ -1051,7 +1051,7 @@ fn build_system(se: &claude_code_transcripts::types::SystemEntry) -> BuiltRows {
                 Value::Null,
                 u(idx as u64),
                 s_str(&hi.command),
-                u(hi.duration_ms),
+                ou(hi.duration_ms),
             ]);
         }
     }
@@ -1298,7 +1298,26 @@ fn build_attachment(
             prompt,
             command_mode,
         } => {
-            row[41] = s_str(prompt);
+            row[41] = match prompt {
+                Value::String(t) => s_str(t),
+                Value::Array(blocks) => {
+                    let parts: Vec<String> = blocks
+                        .iter()
+                        .filter_map(|b| {
+                            b.get("type").and_then(Value::as_str).and_then(|ty| {
+                                if ty == "text" {
+                                    b.get("text").and_then(Value::as_str).map(str::to_string)
+                                } else {
+                                    Some(format!("[{ty}]"))
+                                }
+                            })
+                        })
+                        .collect();
+                    s_str(&parts.join("\n"))
+                }
+                Value::Null => Value::Null,
+                other => json_str(other),
+            };
             row[42] = s(command_mode.clone());
         }
         NestedMemory {
