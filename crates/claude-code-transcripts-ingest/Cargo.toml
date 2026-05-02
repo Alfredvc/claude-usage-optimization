@@ -35,3 +35,6 @@ include_dir = { workspace = true }
 mime_guess = { workspace = true }
 lru = { workspace = true }
 bytes = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
