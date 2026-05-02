@@ -1,21 +1,14 @@
-mod cli;
-mod info;
-mod parse;
-mod pricing;
-mod run;
-mod schema;
-mod serve;
-
 use clap::Parser;
 
-use crate::cli::{Cli, Command};
+use claude_code_transcripts_ingest::cli::{Cli, Command};
+use claude_code_transcripts_ingest::{info, run, serve};
 
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
     match cli.command {
-        Command::Ingest(args) => crate::run::run(args),
-        Command::Serve(args) => crate::serve::run(args).await,
-        Command::Info(args) => crate::info::run(args),
+        Command::Ingest(args) => run::run(args),
+        Command::Serve(args) => serve::run(args).await,
+        Command::Info(args) => info::run(args),
     }
 }
