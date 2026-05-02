@@ -33,7 +33,7 @@ curl -fsSL https://raw.githubusercontent.com/Alfredvc/claude-usage-optimization/
 
 Downloads the latest prebuilt `cct` binary into `~/.local/bin`. Override with `CCT_INSTALL_DIR=/some/dir` or pin a version with `CCT_VERSION=v0.2.0`. Source: [`crates/claude-code-transcripts-ingest/`](crates/claude-code-transcripts-ingest/).
 
-After install, upgrade in place with `cct update` (or `cct update --version v0.2.0` to pin).
+After install, upgrade in place with `cct update` (or `cct update --version v0.2.0` to pin). `cct` checks GitHub for a newer release once every 24 hours in the background and prints a one-line banner on stderr when one is available. Set `CCT_NO_UPDATE_CHECK=1` (or `CI=true`) to disable. Cache lives at `~/.cache/cct/update_check.json`.
 
 ### 3. DuckDB CLI (required)
 

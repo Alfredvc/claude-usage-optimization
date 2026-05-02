@@ -118,6 +118,16 @@ cct update [--version <vX.Y.Z>] [-y|--yes]
 
 Self-updates the running `cct` binary from the latest GitHub release for the current OS/arch. Pass `--version` to install or pin a specific version. Pass `-y` to skip the confirmation prompt.
 
+### Update notifications
+
+`cct` does a background GitHub-releases check once every 24 hours and prints a banner on stderr if a newer release exists. The check is skipped when:
+
+- stderr is not a TTY (e.g. piped output);
+- `CCT_NO_UPDATE_CHECK=1` is set; or
+- `CI=true` is set (the standard CI environment marker).
+
+The cache file lives at `$XDG_CACHE_HOME/cct/update_check.json` (default `~/.cache/cct/update_check.json`). Delete it to force a refresh.
+
 Run `cct --help` / `cct <subcommand> --help` for the authoritative flag list.
 
 ## Library
