@@ -134,7 +134,9 @@ Insert target changes from `last_prompt_entries` to `last_prompt_entries_raw` an
 
 ### 5. Migration
 
-The next `cct ingest` run rebuilds the DuckDB from JSONL, so existing databases pick up the new schema automatically. No in-place ALTER. Users who keep an old `transcripts.duckdb` and run only incremental ingest will need to rebuild — `cct` already supports this; document the expectation in the commit message.
+`cct ingest` rebuilds the DuckDB from JSONL on each run (verify in `run.rs` during implementation; if it does not, the rebuild path is the recommended UX for this change). The schema bootstrap runs `DROP TABLE IF EXISTS last_prompt_entries` before creating the view, since DuckDB rejects `CREATE OR REPLACE VIEW` against an object that already exists as a table. The new `CREATE TABLE IF NOT EXISTS last_prompt_entries_raw` then sits alongside.
+
+Users who run incremental ingest against a pre-existing DuckDB get the bootstrap drop-and-recreate automatically. Document the expectation in the release notes / commit message.
 
 ## Skill / consumer impact
 
