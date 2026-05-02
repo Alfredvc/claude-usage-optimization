@@ -689,6 +689,30 @@ pub enum AttachmentData {
         hook_event: Option<String>,
     },
 
+    /// Emitted when a hook ended the assistant's turn (e.g. harness
+    /// `await_user_message`). Sibling of HookAdditionalContext but with a
+    /// single `message` field.
+    HookStoppedContinuation {
+        message: String,
+        #[serde(rename = "hookName", skip_serializing_if = "Option::is_none")]
+        hook_name: Option<String>,
+        #[serde(rename = "toolUseID", skip_serializing_if = "Option::is_none")]
+        tool_use_id: Option<String>,
+        #[serde(rename = "hookEvent", skip_serializing_if = "Option::is_none")]
+        hook_event: Option<String>,
+    },
+
+    /// Single-string sibling of HookAdditionalContext.
+    HookSystemMessage {
+        content: String,
+        #[serde(rename = "hookName", skip_serializing_if = "Option::is_none")]
+        hook_name: Option<String>,
+        #[serde(rename = "toolUseID", skip_serializing_if = "Option::is_none")]
+        tool_use_id: Option<String>,
+        #[serde(rename = "hookEvent", skip_serializing_if = "Option::is_none")]
+        hook_event: Option<String>,
+    },
+
     // ── File / filesystem ────────────────────────────────────────────────
     File {
         filename: String,
@@ -767,6 +791,14 @@ pub enum AttachmentData {
 
     // ── Tasks ────────────────────────────────────────────────────────────
     TaskReminder {
+        content: Vec<Value>,
+        #[serde(rename = "itemCount")]
+        item_count: u32,
+    },
+
+    /// Older alias for TaskReminder; identical shape, only the discriminator
+    /// differs. Observed payloads have always been empty.
+    TodoReminder {
         content: Vec<Value>,
         #[serde(rename = "itemCount")]
         item_count: u32,

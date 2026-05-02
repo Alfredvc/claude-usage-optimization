@@ -1081,6 +1081,8 @@ fn build_attachment(
         HookCancelled(_) => "hook_cancelled",
         HookAdditionalContext { .. } => "hook_additional_context",
         HookPermissionDecision { .. } => "hook_permission_decision",
+        HookStoppedContinuation { .. } => "hook_stopped_continuation",
+        HookSystemMessage { .. } => "hook_system_message",
         File { .. } => "file",
         EditedTextFile { .. } => "edited_text_file",
         Directory { .. } => "directory",
@@ -1092,6 +1094,7 @@ fn build_attachment(
         DynamicSkill { .. } => "dynamic_skill",
         InvokedSkills { .. } => "invoked_skills",
         TaskReminder { .. } => "task_reminder",
+        TodoReminder { .. } => "todo_reminder",
         Diagnostics { .. } => "diagnostics",
         DateChange { .. } => "date_change",
         DeferredToolsDelta { .. } => "deferred_tools_delta",
@@ -1161,6 +1164,23 @@ fn build_attachment(
             row[3] = s(tool_use_id.clone());
             row[4] = s(hook_event.clone());
             row[11] = s_str(decision);
+        }
+        HookStoppedContinuation {
+            message,
+            hook_name,
+            tool_use_id,
+            hook_event,
+        }
+        | HookSystemMessage {
+            content: message,
+            hook_name,
+            tool_use_id,
+            hook_event,
+        } => {
+            row[2] = s(hook_name.clone());
+            row[3] = s(tool_use_id.clone());
+            row[4] = s(hook_event.clone());
+            row[5] = s_str(message);
         }
         File {
             filename,
@@ -1243,6 +1263,10 @@ fn build_attachment(
             }
         }
         TaskReminder {
+            content,
+            item_count,
+        }
+        | TodoReminder {
             content,
             item_count,
         } => {
@@ -1570,5 +1594,58 @@ mod tests {
         assert_eq!(row[44], serde_json::json!("Project"));
         assert_eq!(row[45], serde_json::json!("body"));
         assert_eq!(row[46], serde_json::json!(false));
+    }
+
+    /// Three attachment shapes that previously fell through to Unknown:
+    /// hook_stopped_continuation, hook_system_message, todo_reminder.
+    #[test]
+    fn newly_supported_attachment_variants_round_trip() {
+        let lines = [
+            r#"{"type":"attachment","uuid":"g1","parentUuid":null,"isSidechain":false,"sessionId":"s","timestamp":"2024-01-01T00:00:00.000000Z","attachment":{"type":"hook_stopped_continuation","message":"Awaiting owner reply (turn ended).","hookName":"PostToolUse:x","toolUseID":"tu1","hookEvent":"PostToolUse"}}"#,
+            r#"{"type":"attachment","uuid":"g2","parentUuid":null,"isSidechain":false,"sessionId":"s","timestamp":"2024-01-01T00:00:00.000000Z","attachment":{"type":"hook_system_message","content":"Describe your goal.","hookName":"PreToolUse:x","toolUseID":"tu2","hookEvent":"PreToolUse"}}"#,
+            r#"{"type":"attachment","uuid":"g3","parentUuid":null,"isSidechain":false,"sessionId":"s","timestamp":"2024-01-01T00:00:00.000000Z","attachment":{"type":"todo_reminder","content":[],"itemCount":0}}"#,
+        ];
+        let tmp = TempJsonl::new(&lines.join("\n"));
+        let parsed = parse_file(&tmp.0, &HashMap::new());
+
+        assert!(parsed.failures.is_empty(), "{:?}", parsed.failures);
+        assert!(
+            !parsed
+                .unknown_variants
+                .contains(&"AttachmentData".to_string()),
+            "none of these should be Unknown: {:?}",
+            parsed.unknown_variants
+        );
+        assert_eq!(parsed.entries.len(), 3);
+
+        let row_for = |idx: usize| -> &Vec<Value> {
+            parsed.entries[idx]
+                .variant
+                .as_ref()
+                .map(|(_, r)| r)
+                .expect("variant row")
+        };
+
+        let r0 = row_for(0);
+        assert_eq!(r0[1], serde_json::json!("hook_stopped_continuation"));
+        assert_eq!(r0[2], serde_json::json!("PostToolUse:x"));
+        assert_eq!(r0[3], serde_json::json!("tu1"));
+        assert_eq!(r0[4], serde_json::json!("PostToolUse"));
+        assert_eq!(
+            r0[5],
+            serde_json::json!("Awaiting owner reply (turn ended).")
+        );
+
+        let r1 = row_for(1);
+        assert_eq!(r1[1], serde_json::json!("hook_system_message"));
+        assert_eq!(r1[2], serde_json::json!("PreToolUse:x"));
+        assert_eq!(r1[3], serde_json::json!("tu2"));
+        assert_eq!(r1[4], serde_json::json!("PreToolUse"));
+        assert_eq!(r1[5], serde_json::json!("Describe your goal."));
+
+        let r2 = row_for(2);
+        assert_eq!(r2[1], serde_json::json!("todo_reminder"));
+        assert_eq!(r2[29], serde_json::json!("[]"));
+        assert_eq!(r2[30], serde_json::json!(0));
     }
 }
