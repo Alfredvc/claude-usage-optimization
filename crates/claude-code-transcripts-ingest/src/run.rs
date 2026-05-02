@@ -30,7 +30,38 @@ use crate::schema::{
     COMMENTS_DDL, DEDUPED_TABLE_DDL, INDEXES_DDL, PK_DDL, SCHEMA_DDL, TOOL_USES_VIEW_DDL,
 };
 
+/// Summary returned by [`run_ingest`]. Fields are read by integration tests
+/// (Task 5); the `allow(dead_code)` suppresses the lint until that crate
+/// is wired up.
+#[allow(dead_code)]
+#[derive(Debug, Default, Clone)]
+pub struct RunSummary {
+    pub files_processed: usize,
+    pub entry_counts: HashMap<String, u64>,
+    pub unknown_variants: HashMap<String, u64>,
+    pub unknown_models: HashMap<String, u64>,
+}
+
 pub fn run(cli: IngestArgs) -> ! {
+    match run_ingest(cli) {
+        Ok(_) => std::process::exit(0),
+        Err(msg) => {
+            eprintln!("error: {msg}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Library entry point used by `pub fn run` (the binary path) and by integration
+/// tests. Returns `Err` for top-level setup/IO/DB failures so callers can avoid
+/// `process::exit`.
+///
+/// Limitation: the parser worker thread (spawned at line ~110 of this file)
+/// still calls `die` (process-exit) on a JSONL parse failure — threading that
+/// error back through the channel is out of scope. Tests that drive
+/// `run_ingest` must use well-formed fixtures. The originally-reported parse
+/// failure is covered by the manual real-corpus smoke (acceptance criterion 1).
+pub fn run_ingest(cli: IngestArgs) -> Result<RunSummary, String> {
     let started = Instant::now();
     let jobs = if cli.jobs == 0 {
         num_cpus_or(4)
@@ -41,14 +72,14 @@ pub fn run(cli: IngestArgs) -> ! {
     rayon::ThreadPoolBuilder::new()
         .num_threads(jobs)
         .build_global()
-        .unwrap_or_else(|e| die(format!("rayon init: {e}")));
+        .map_err(|e| format!("rayon init: {e}"))?;
 
     remove_db_files(&cli.output);
 
     if let Some(parent) = cli.output.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent)
-                .unwrap_or_else(|e| die(format!("create {}: {e}", parent.display())));
+                .map_err(|e| format!("create {}: {e}", parent.display()))?;
         }
     }
 
@@ -59,10 +90,10 @@ pub fn run(cli: IngestArgs) -> ! {
         cli.input_dir.display()
     );
 
-    let mut conn = Connection::open(&cli.output)
-        .unwrap_or_else(|e| die(format!("open {}: {e}", cli.output.display())));
+    let mut conn =
+        Connection::open(&cli.output).map_err(|e| format!("open {}: {e}", cli.output.display()))?;
     conn.execute_batch(SCHEMA_DDL)
-        .unwrap_or_else(|e| die(format!("schema init: {e}")));
+        .map_err(|e| format!("schema init: {e}"))?;
 
     let mut rows = seed_rows();
     if let Some(p) = &cli.pricing {
@@ -125,18 +156,16 @@ pub fn run(cli: IngestArgs) -> ! {
 
     // Single transaction for the whole ingest: keep appenders open across
     // every file so DuckDB only scans/compresses/flushes once at commit.
-    let tx = conn
-        .transaction()
-        .unwrap_or_else(|e| die(format!("begin tx: {e}")));
+    let tx = conn.transaction().map_err(|e| format!("begin tx: {e}"))?;
     {
         let mut transcripts_app = tx
             .appender("transcripts")
-            .unwrap_or_else(|e| die(format!("appender transcripts: {e}")));
+            .map_err(|e| format!("appender transcripts: {e}"))?;
         let transcripts_ts = ts_cols("transcripts");
 
         let mut entries_app = tx
             .appender("entries")
-            .unwrap_or_else(|e| die(format!("appender entries: {e}")));
+            .map_err(|e| format!("appender entries: {e}"))?;
         let entries_ts = ts_cols("entries");
         let mut variant_apps: HashMap<&'static str, duckdb::Appender<'_>> = HashMap::new();
 
@@ -172,7 +201,7 @@ pub fn run(cli: IngestArgs) -> ! {
                 Value::String(Utc::now().to_rfc3339()),
             ];
             append_row(&mut transcripts_app, &transcript_row, transcripts_ts)
-                .unwrap_or_else(|m| die(format!("insert transcript {}: {m}", t.file_path)));
+                .map_err(|m| format!("insert transcript {}: {m}", t.file_path))?;
 
             let n_entries = parsed.entries.len() as i64;
             let start_id = next_id;
@@ -183,13 +212,13 @@ pub fn run(cli: IngestArgs) -> ! {
                 let id = start_id + idx as i64;
                 e.entry[0] = Value::Number(serde_json::Number::from(id));
                 append_row(&mut entries_app, &e.entry, entries_ts)
-                    .unwrap_or_else(|m| die(format!("write {fp}: insert entry: {m}")));
+                    .map_err(|m| format!("write {fp}: insert entry: {m}"))?;
 
                 if let Some((table, mut vrow)) = e.variant {
                     vrow[0] = Value::Number(serde_json::Number::from(id));
                     let app = get_or_open(&mut variant_apps, &tx, table);
                     append_row(app, &vrow, ts_cols(table))
-                        .unwrap_or_else(|m| die(format!("write {fp}: insert {table}: {m}")));
+                        .map_err(|m| format!("write {fp}: insert {table}: {m}"))?;
                 }
                 for (table, rows) in e.children {
                     let ts = ts_cols(table);
@@ -197,7 +226,7 @@ pub fn run(cli: IngestArgs) -> ! {
                     for mut r in rows {
                         r[0] = Value::Number(serde_json::Number::from(id));
                         append_row(app, &r, ts)
-                            .unwrap_or_else(|m| die(format!("write {fp}: insert {table}: {m}")));
+                            .map_err(|m| format!("write {fp}: insert {table}: {m}"))?;
                     }
                 }
             }
@@ -205,11 +234,11 @@ pub fn run(cli: IngestArgs) -> ! {
         }
         // Appenders + prepared statement drop here, flushing before commit.
     }
-    tx.commit().unwrap_or_else(|e| die(format!("commit: {e}")));
+    tx.commit().map_err(|e| format!("commit: {e}"))?;
 
     parser_handle
         .join()
-        .unwrap_or_else(|_| die("parser thread panicked".into()));
+        .map_err(|_| "parser thread panicked".to_string())?;
 
     stop_progress.store(true, Ordering::Relaxed);
     if let Some(h) = progress_handle {
@@ -217,15 +246,15 @@ pub fn run(cli: IngestArgs) -> ! {
     }
 
     conn.execute_batch(TOOL_USES_VIEW_DDL)
-        .unwrap_or_else(|e| die(format!("create view: {e}")));
+        .map_err(|e| format!("create view: {e}"))?;
     conn.execute_batch(PK_DDL)
-        .unwrap_or_else(|e| die(format!("add primary keys: {e}")));
+        .map_err(|e| format!("add primary keys: {e}"))?;
     conn.execute_batch(INDEXES_DDL)
-        .unwrap_or_else(|e| die(format!("create indexes: {e}")));
+        .map_err(|e| format!("create indexes: {e}"))?;
     conn.execute_batch(DEDUPED_TABLE_DDL)
-        .unwrap_or_else(|e| die(format!("create deduped table: {e}")));
+        .map_err(|e| format!("create deduped table: {e}"))?;
     conn.execute_batch(COMMENTS_DDL)
-        .unwrap_or_else(|e| die(format!("add column comments: {e}")));
+        .map_err(|e| format!("add column comments: {e}"))?;
 
     let processed_n = processed.load(Ordering::Relaxed);
     let counts = entry_counts(&conn);
@@ -264,9 +293,16 @@ pub fn run(cli: IngestArgs) -> ! {
     let s = elapsed.as_secs() % 60;
     eprintln!("Elapsed:      {h:02}:{m:02}:{s:02}");
 
+    let summary = RunSummary {
+        files_processed: processed_n,
+        entry_counts: counts,
+        unknown_variants: unknown_vars.clone(),
+        unknown_models: unknown.clone(),
+    };
+    drop(unknown_vars);
+    drop(unknown);
     drop(conn);
-
-    std::process::exit(0);
+    Ok(summary)
 }
 
 fn die(msg: String) -> ! {
