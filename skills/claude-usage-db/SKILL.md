@@ -63,6 +63,19 @@ Each `entries` row has a `type` (`assistant` / `user` / `system` / `attachment` 
 
 Plus narrow metadata variants (`permission_mode_entries`, `last_prompt_entries`, `ai_title_entries`, `summary_entries`, `pr_link_entries`, `mode_entries`, `tag_entries`, `task_summary_entries`, `worktree_state_entries`, `forked_*`, `marble_origami_*`, …). Run `SHOW TABLES` or query `duckdb_columns()` when you need one; most analytical queries don't.
 
+Note on `last_prompt_entries`: as of Claude Code's new `last-prompt` format, `last_prompt` is NULL for rows where the transcript stored only `leaf_uuid`. Filter with `WHERE last_prompt IS NOT NULL` to restrict to old-format rows. `leaf_uuid` is a *soft* reference to `entries(uuid)` and does not point at the prompt-text entry — it is the conversation-tree leaf at session-save time. Always join on **both** `uuid` and `session_id`, because `entries(uuid)` is non-unique across resumed sessions:
+
+```sql
+SELECT lpe.session_id, e.type, e.uuid
+FROM last_prompt_entries lpe
+JOIN entries e
+  ON e.uuid = lpe.leaf_uuid
+ AND e.session_id = lpe.session_id
+WHERE lpe.leaf_uuid IS NOT NULL;
+```
+
+Even with the two-column join, expect 1:N fan-out for resumed sessions where the same `(uuid, session_id)` pair is replayed.
+
 **Always join variant tables through `entries`:**
 ```sql
 SELECT e.timestamp, ae.model, ae.cost_usd
