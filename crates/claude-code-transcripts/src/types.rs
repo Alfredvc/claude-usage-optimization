@@ -1015,7 +1015,10 @@ pub struct PermissionModeEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LastPromptEntry {
-    pub last_prompt: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_prompt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub leaf_uuid: Option<String>,
     pub session_id: String,
 }
 
@@ -1407,5 +1410,68 @@ mod tests {
         }"#;
         let v: AssistantMessage = serde_json::from_str(json).unwrap();
         assert!(v.model.is_none());
+    }
+}
+
+#[cfg(test)]
+mod last_prompt_tests {
+    use super::*;
+
+    fn parse(line: &str) -> Entry {
+        serde_json::from_str::<Entry>(line).expect("parse")
+    }
+
+    #[test]
+    fn last_prompt_old_format_inline_text() {
+        let e = parse(r#"{"type":"last-prompt","lastPrompt":"hello world","sessionId":"S"}"#);
+        match e {
+            Entry::LastPrompt(x) => {
+                assert_eq!(x.last_prompt.as_deref(), Some("hello world"));
+                assert_eq!(x.leaf_uuid, None);
+                assert_eq!(x.session_id, "S");
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn last_prompt_new_format_leaf_uuid_only() {
+        let e = parse(r#"{"type":"last-prompt","leafUuid":"u1","sessionId":"S"}"#);
+        match e {
+            Entry::LastPrompt(x) => {
+                assert_eq!(x.last_prompt, None);
+                assert_eq!(x.leaf_uuid.as_deref(), Some("u1"));
+                assert_eq!(x.session_id, "S");
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn last_prompt_hypothetical_both_fields() {
+        let e = parse(
+            r#"{"type":"last-prompt","lastPrompt":"inline","leafUuid":"u2","sessionId":"S"}"#,
+        );
+        match e {
+            Entry::LastPrompt(x) => {
+                assert_eq!(x.last_prompt.as_deref(), Some("inline"));
+                assert_eq!(x.leaf_uuid.as_deref(), Some("u2"));
+                assert_eq!(x.session_id, "S");
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn last_prompt_hypothetical_neither_field() {
+        let e = parse(r#"{"type":"last-prompt","sessionId":"S"}"#);
+        match e {
+            Entry::LastPrompt(x) => {
+                assert_eq!(x.last_prompt, None);
+                assert_eq!(x.leaf_uuid, None);
+                assert_eq!(x.session_id, "S");
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
     }
 }

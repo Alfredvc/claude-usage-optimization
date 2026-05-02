@@ -465,13 +465,25 @@ fn build_variant(
             )),
             vec![],
         )),
-        Entry::LastPrompt(x) => Ok((
-            Some((
-                "last_prompt_entries",
-                vec![Value::Null, s_str(&x.last_prompt), s_str(&x.session_id)],
-            )),
-            vec![],
-        )),
+        Entry::LastPrompt(x) => {
+            if x.last_prompt.is_none() && x.leaf_uuid.is_none() {
+                // Possible Claude Code format change (e.g. new required discriminator).
+                // Surfaces in the existing unknown_variants ingest summary.
+                unknown_variants.push("last-prompt:no-fields".to_string());
+            }
+            Ok((
+                Some((
+                    "last_prompt_entries",
+                    vec![
+                        Value::Null,
+                        x.leaf_uuid.as_deref().map_or(Value::Null, s_str),
+                        x.last_prompt.as_deref().map_or(Value::Null, s_str),
+                        s_str(&x.session_id),
+                    ],
+                )),
+                vec![],
+            ))
+        }
         Entry::AiTitle(x) => Ok((
             Some((
                 "ai_title_entries",
