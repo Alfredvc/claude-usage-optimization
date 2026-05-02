@@ -2,6 +2,39 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.9] - 2026-05-02
+
+### 🚀 Features
+
+- *(transcripts)* Support last-prompt leafUuid format
+- *(transcripts)* Support hook_stopped_continuation, hook_system_message, todo_reminder attachments
+
+### 🐛 Bug Fixes
+
+- *(transcripts)* Tolerate optional hook duration and image-laden queued prompts
+
+### 💼 Other
+
+- Add tempfile workspace dev-dep for ingest tests
+
+### 🚜 Refactor
+
+- *(ingest)* Extract run_ingest with RunSummary for test-callability
+
+### 🧪 Testing
+
+- *(ingest)* Integration test for last_prompt format matrix
+
+### ⚙️ Miscellaneous Tasks
+
+- Address review nits
+
+## [0.1.8] - 2026-04-17
+
+### ⚙️ Miscellaneous Tasks
+
+- Release v0.1.8
+
 ## [0.1.7] - 2026-04-17
 
 ### ⚙️ Miscellaneous Tasks
