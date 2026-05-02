@@ -139,7 +139,7 @@ resolved AS (
              WHERE b.entry_id = c.cur_entry_id
                AND b.block_type = 'text')
         ) AS resolved_text,
-        ROW_NUMBER() OVER (PARTITION BY c.start_entry_id ORDER BY c.depth DESC) AS rn
+        ROW_NUMBER() OVER (PARTITION BY c.start_entry_id ORDER BY c.depth ASC) AS rn
     FROM chain c
     LEFT JOIN user_entries ue ON ue.entry_id = c.cur_entry_id
     WHERE EXISTS (
