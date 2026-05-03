@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.10] - 2026-05-03
+
+### 🚀 Features
+
+- *(ingest)* Add `cct update` self-updater
+- *(ingest)* Version_check module with cache, TTL, banner, gates, fetcher, public API
+- *(ingest)* Call version_check from main
+
+### 🐛 Bug Fixes
+
+- *(ingest)* Mirror /releases/latest semantics in version_check fetcher
+- *(ingest)* Address reviewer follow-ups for update-notifier
+- *(ingest)* Use NamedTempFile in parse tests to eliminate pid+nanos collisions
+
+### 📚 Documentation
+
+- Document cct update-notifier banner
+
 ## [0.1.9] - 2026-05-02
 
 ### 🚀 Features
@@ -28,6 +46,7 @@ All notable changes to this project will be documented in this file.
 ### ⚙️ Miscellaneous Tasks
 
 - Address review nits
+- Release v0.1.9
 
 ## [0.1.8] - 2026-04-17
 

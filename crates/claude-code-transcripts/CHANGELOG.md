@@ -13,6 +13,10 @@ All notable changes to this project will be documented in this file.
 
 - *(transcripts)* Tolerate optional hook duration and image-laden queued prompts
 
+### ⚙️ Miscellaneous Tasks
+
+- Release v0.1.9
+
 ## [0.1.8] - 2026-04-17
 
 ### ⚙️ Miscellaneous Tasks
