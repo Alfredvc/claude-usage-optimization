@@ -20,14 +20,24 @@ pub(crate) struct VersionCache {
 }
 
 pub(crate) fn cache_path() -> PathBuf {
-    let cache_home = std::env::var("XDG_CACHE_HOME")
+    let xdg = std::env::var("XDG_CACHE_HOME").ok();
+    let home = std::env::var("HOME")
         .ok()
+        .or_else(|| std::env::var("USERPROFILE").ok());
+    cache_path_with_env(xdg.as_deref(), home.as_deref())
+}
+
+/// Pure helper: resolve cache path from explicit env values. Lets tests
+/// drive the env-unset fallback without touching process-wide env (which
+/// would race with parallel tests). When both `xdg` and `home` are
+/// `None` (or blank), falls back to `.cache/cct/update_check.json`
+/// relative to the current working directory.
+pub(crate) fn cache_path_with_env(xdg: Option<&str>, home: Option<&str>) -> PathBuf {
+    let cache_home = xdg
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            let home = std::env::var("HOME")
-                .or_else(|_| std::env::var("USERPROFILE"))
-                .unwrap_or_else(|_| ".".to_string());
+            let home = home.filter(|s| !s.is_empty()).unwrap_or(".");
             PathBuf::from(home).join(".cache")
         });
     cache_home.join("cct").join("update_check.json")
@@ -66,12 +76,30 @@ pub(crate) fn format_banner_if_newer(current: &str, latest: &str) -> Option<Stri
     if !self_update::version::bump_is_greater(current, latest_clean).unwrap_or(false) {
         return None;
     }
+    // Compose the inner content lines first, then size the box around the
+    // widest one. Versions vary in length, so a hard-coded border width
+    // would either truncate or leave a ragged right edge. Width is
+    // measured in `chars` (not bytes) so the `→` glyph is counted as one
+    // column — that matches how monospace terminals render it.
+    let line1 = format!("Update available: {current} → {latest_clean}");
+    let line2 = "Run `cct update` to upgrade.".to_string();
+    // Minimum width keeps the banner visually proportional even when both
+    // version strings are very short (e.g. `0 → 1`). Matches the previous
+    // hard-coded border size.
+    const MIN_INNER: usize = 44;
+    let inner_width = MIN_INNER
+        .max(line1.chars().count())
+        .max(line2.chars().count());
+    let border = "─".repeat(inner_width + 2);
+    let pad = |s: &str| {
+        let n = s.chars().count();
+        let fill = inner_width.saturating_sub(n);
+        format!("│ {s}{} │", " ".repeat(fill))
+    };
     Some(format!(
-        "\n\
-         ╭──────────────────────────────────────────────╮\n\
-         │ Update available: {current} → {latest_clean}\n\
-         │ Run `cct update` to upgrade.\n\
-         ╰──────────────────────────────────────────────╯\n",
+        "\n╭{border}╮\n{}\n{}\n╰{border}╯\n",
+        pad(&line1),
+        pad(&line2),
     ))
 }
 
@@ -145,6 +173,36 @@ fn gates_open(cmd: &Command) -> bool {
     std::io::stderr().is_terminal()
 }
 
+/// Sweep `update_check.tmp.*` files in `dir` whose mtime is older than
+/// `max_age_secs`. Best-effort: every error (including a missing
+/// directory, an unreadable entry, or a failed unlink) is swallowed.
+/// Tmp files are produced by `write_cache_atomic_at` between the
+/// `write` and the `rename`; if the process dies in that window the
+/// tmp file lingers, and over years that adds up. Seven days is well
+/// past any realistic `cct` run, so anything older is definitely orphaned.
+pub(crate) fn sweep_old_tmp_files(dir: &std::path::Path, max_age_secs: u64, now: SystemTime) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name_str) = name.to_str() else {
+            continue;
+        };
+        if !name_str.starts_with("update_check.tmp.") {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else { continue };
+        let Ok(mtime) = meta.modified() else { continue };
+        let age = now.duration_since(mtime).map(|d| d.as_secs()).unwrap_or(0);
+        if age > max_age_secs {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+const TMP_SWEEP_MAX_AGE_SECS: u64 = 7 * 24 * 60 * 60;
+
 /// Spawn a detached background thread that refreshes the cache if stale.
 /// Never blocks. Errors and panics inside the thread are swallowed.
 ///
@@ -157,16 +215,29 @@ fn gates_open(cmd: &Command) -> bool {
 /// The foreground process may exit before this thread finishes — that's
 /// by design. The cache will be repopulated on the next slow-enough run.
 pub fn maybe_spawn_check(cmd: &Command) {
-    if !gates_open(cmd) {
+    spawn_check_with(cache_path(), gates_open(cmd));
+}
+
+/// Inner spawn entry point with the gate decision and cache path lifted
+/// out as parameters. Lets unit tests prove the gate-closed path is a
+/// true no-op (no fs writes) without spinning up an `is_terminal()`
+/// fake. Public callers should go through [`maybe_spawn_check`].
+pub(crate) fn spawn_check_with(path: PathBuf, gates_open: bool) {
+    if !gates_open {
         return;
     }
-    let path = cache_path();
     let existing = read_cache_at(&path);
     if !should_refresh(existing.as_ref(), now_unix()) {
         return;
     }
     std::thread::spawn(move || {
         let _ = std::panic::catch_unwind(move || {
+            // Best-effort orphan sweep before the fetch. Runs once per
+            // refresh (i.e. at most daily), which is plenty — the failure
+            // mode it guards against (process killed mid-rename) is rare.
+            if let Some(parent) = path.parent() {
+                sweep_old_tmp_files(parent, TMP_SWEEP_MAX_AGE_SECS, SystemTime::now());
+            }
             let fetched = fetch_latest_version();
             let prev_version = read_cache_at(&path)
                 .map(|c| c.latest_version)
@@ -180,20 +251,37 @@ pub fn maybe_spawn_check(cmd: &Command) {
     });
 }
 
-/// Read the cache (no network) and print a banner to stderr if a newer
-/// version is recorded. Called before the subcommand runs so that
-/// long-running subcommands like `serve` still see the banner.
+/// Read the cache (no network) and return the banner string that should
+/// be printed, or `None` if nothing should print.
+///
+/// This is strictly cache-only: it never sees the result of the fetch
+/// kicked off by the sibling [`maybe_spawn_check`] call in the same
+/// process — that fetch finishes (and writes the cache) after this
+/// returns. So the banner reflects the PREVIOUS run's fetch.
 pub fn maybe_print_banner(cmd: &Command) {
-    if !gates_open(cmd) {
-        return;
-    }
-    let Some(cache) = read_cache_at(&cache_path()) else {
-        return;
-    };
-    let current = self_update::cargo_crate_version!();
-    if let Some(banner) = format_banner_if_newer(current, &cache.latest_version) {
+    if let Some(banner) = compute_banner_with(
+        &cache_path(),
+        gates_open(cmd),
+        self_update::cargo_crate_version!(),
+    ) {
         eprint!("{banner}");
     }
+}
+
+/// Inner banner computation with gate / cache path / current version
+/// lifted out as parameters. Keeps the print path testable without
+/// capturing stderr. Public callers should go through
+/// [`maybe_print_banner`].
+pub(crate) fn compute_banner_with(
+    path: &std::path::Path,
+    gates_open: bool,
+    current: &str,
+) -> Option<String> {
+    if !gates_open {
+        return None;
+    }
+    let cache = read_cache_at(path)?;
+    format_banner_if_newer(current, &cache.latest_version)
 }
 
 #[cfg(test)]
@@ -309,6 +397,7 @@ mod tests {
         assert!(out.contains("0.1.9"), "missing current version: {out}");
         assert!(out.contains("0.2.0"), "missing latest version: {out}");
         assert!(out.contains("cct update"), "missing upgrade hint: {out}");
+        assert_box_well_formed(&out);
     }
 
     #[test]
@@ -319,6 +408,50 @@ mod tests {
             !out.contains("v0.2.0"),
             "leading v should be stripped: {out}"
         );
+        assert_box_well_formed(&out);
+    }
+
+    #[test]
+    fn banner_grows_with_long_version_strings() {
+        // Versions long enough to overflow the 44-char minimum width — the
+        // box must grow to accommodate them, not truncate.
+        let out = format_banner_if_newer("0.1.9", "999.999.999-rc.1+verylongbuildmeta")
+            .expect("expected banner");
+        assert!(out.contains("999.999.999-rc.1+verylongbuildmeta"));
+        assert_box_well_formed(&out);
+    }
+
+    /// Validate that every content row starts with `│ `, ends with ` │`,
+    /// is the same visible width as the border row, and that the corners
+    /// match. Catches the regression where right-border padding was missing.
+    fn assert_box_well_formed(out: &str) {
+        let lines: Vec<&str> = out.lines().filter(|l| !l.is_empty()).collect();
+        assert!(lines.len() >= 4, "expected >=4 non-empty lines: {out:?}");
+        let top = lines[0];
+        let bottom = lines[lines.len() - 1];
+        assert!(top.starts_with('╭') && top.ends_with('╮'), "top: {top:?}");
+        assert!(
+            bottom.starts_with('╰') && bottom.ends_with('╯'),
+            "bottom: {bottom:?}"
+        );
+        let top_width = top.chars().count();
+        let bottom_width = bottom.chars().count();
+        assert_eq!(top_width, bottom_width, "top/bottom width mismatch");
+        for content in &lines[1..lines.len() - 1] {
+            assert!(
+                content.starts_with("│ "),
+                "content line missing left border: {content:?}"
+            );
+            assert!(
+                content.ends_with(" │"),
+                "content line missing right border: {content:?}"
+            );
+            assert_eq!(
+                content.chars().count(),
+                top_width,
+                "content line width != border width: {content:?}"
+            );
+        }
     }
 
     #[test]
@@ -366,13 +499,18 @@ mod tests {
     }
 
     #[test]
-    fn deterministic_gates_closed_for_update_even_when_env_clean() {
+    fn gates_closed_for_update_command_regardless_of_env() {
+        // Authoritative regression guard for the `Update` short-circuit:
+        // `cct update` must never fire the banner gate, even when every
+        // env opt-out is unset. Smoke-test step 8 in the plan references
+        // this test by name.
         use crate::cli::{Command, UpdateArgs};
         let update = Command::Update(UpdateArgs {
             version: None,
             yes: false,
         });
         assert!(!deterministic_gates_open(&update, /*env_disabled=*/ false));
+        assert!(!deterministic_gates_open(&update, /*env_disabled=*/ true));
     }
 
     #[test]
@@ -382,5 +520,130 @@ mod tests {
             db: std::path::PathBuf::from("/tmp/x.duckdb"),
         });
         assert!(!deterministic_gates_open(&info, /*env_disabled=*/ true));
+    }
+
+    #[test]
+    fn cache_path_uses_xdg_when_set() {
+        let p = cache_path_with_env(Some("/tmp/xdg"), Some("/home/u"));
+        assert_eq!(p, PathBuf::from("/tmp/xdg/cct/update_check.json"));
+    }
+
+    #[test]
+    fn cache_path_uses_home_when_xdg_blank_or_unset() {
+        let p = cache_path_with_env(None, Some("/home/u"));
+        assert_eq!(p, PathBuf::from("/home/u/.cache/cct/update_check.json"));
+        let p = cache_path_with_env(Some(""), Some("/home/u"));
+        assert_eq!(p, PathBuf::from("/home/u/.cache/cct/update_check.json"));
+    }
+
+    #[test]
+    fn cache_path_falls_back_to_cwd_when_both_envs_unset() {
+        // Both XDG_CACHE_HOME and HOME (and USERPROFILE on Windows) can be
+        // missing in stripped sandboxes / minimal containers. We don't
+        // panic — we land in `./.cache/cct/...` so the writer at least
+        // gets a relative path it can attempt.
+        let p = cache_path_with_env(None, None);
+        assert_eq!(p, PathBuf::from("./.cache/cct/update_check.json"));
+        let p = cache_path_with_env(Some(""), Some(""));
+        assert_eq!(p, PathBuf::from("./.cache/cct/update_check.json"));
+    }
+
+    #[test]
+    fn sweep_removes_only_old_tmp_files() {
+        let dir = TempDir::new().unwrap();
+        // Two tmp files plus one unrelated file. We can't easily set
+        // mtime portably without an extra dep, so instead we sweep with
+        // a max_age of 0 and a `now` strictly after each file's mtime —
+        // every tmp file qualifies. The unrelated file must survive
+        // because its name does not start with `update_check.tmp.`.
+        let old_tmp = dir.path().join("update_check.tmp.1234");
+        let other_tmp = dir.path().join("update_check.tmp.5678");
+        let unrelated = dir.path().join("update_check.json");
+        std::fs::write(&old_tmp, b"x").unwrap();
+        std::fs::write(&other_tmp, b"y").unwrap();
+        std::fs::write(&unrelated, b"z").unwrap();
+        // `now` = SystemTime::now() + 1s ensures every file's age > 0.
+        let later = SystemTime::now() + std::time::Duration::from_secs(1);
+        sweep_old_tmp_files(dir.path(), 0, later);
+        assert!(!old_tmp.exists(), "old tmp should be swept");
+        assert!(!other_tmp.exists(), "old tmp should be swept");
+        assert!(unrelated.exists(), "non-tmp file must be preserved");
+    }
+
+    #[test]
+    fn sweep_keeps_recent_tmp_files() {
+        let dir = TempDir::new().unwrap();
+        let recent = dir.path().join("update_check.tmp.999");
+        std::fs::write(&recent, b"x").unwrap();
+        // max_age of 1 day vs. a file we just created — must survive.
+        sweep_old_tmp_files(dir.path(), 24 * 60 * 60, SystemTime::now());
+        assert!(recent.exists());
+    }
+
+    #[test]
+    fn sweep_swallows_missing_dir() {
+        // Should not panic.
+        sweep_old_tmp_files(
+            std::path::Path::new("/nonexistent/cct/sweep/dir"),
+            0,
+            SystemTime::now(),
+        );
+    }
+
+    #[test]
+    fn spawn_check_with_gates_closed_does_not_touch_cache() {
+        // When gates are closed (env-disabled, Update subcommand, or
+        // non-TTY) the spawn entry must be a true no-op: no fs writes,
+        // no thread, no tmp files. We verify by pointing it at a fresh
+        // temp dir and confirming nothing appears.
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("cct").join("update_check.json");
+        spawn_check_with(path.clone(), /*gates_open=*/ false);
+        // Nothing should exist — not the parent dir, not the cache file,
+        // not any tmp file.
+        assert!(!path.exists());
+        assert!(!path.parent().unwrap().exists());
+    }
+
+    #[test]
+    fn compute_banner_returns_none_when_gates_closed() {
+        // Even with a cache file on disk that WOULD produce a banner,
+        // the gate-closed path must return None.
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("update_check.json");
+        write_cache_atomic_at(
+            &path,
+            &VersionCache {
+                last_checked_unix: 1,
+                latest_version: "99.0.0".to_string(),
+            },
+        )
+        .unwrap();
+        assert!(compute_banner_with(&path, /*gates_open=*/ false, "0.1.9").is_none());
+    }
+
+    #[test]
+    fn compute_banner_returns_none_when_cache_missing() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("update_check.json");
+        assert!(compute_banner_with(&path, /*gates_open=*/ true, "0.1.9").is_none());
+    }
+
+    #[test]
+    fn compute_banner_returns_some_when_cache_has_newer_version() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("update_check.json");
+        write_cache_atomic_at(
+            &path,
+            &VersionCache {
+                last_checked_unix: 1,
+                latest_version: "99.0.0".to_string(),
+            },
+        )
+        .unwrap();
+        let banner =
+            compute_banner_with(&path, /*gates_open=*/ true, "0.1.9").expect("expected banner");
+        assert!(banner.contains("0.1.9"));
+        assert!(banner.contains("99.0.0"));
     }
 }
