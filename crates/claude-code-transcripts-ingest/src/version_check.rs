@@ -98,22 +98,30 @@ const REPO_OWNER: &str = "Alfredvc";
 const REPO_NAME: &str = "claude-usage-optimization";
 
 pub(crate) fn fetch_latest_version() -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    let releases = self_update::backends::github::ReleaseList::configure()
+    // Hit GitHub's `/repos/{owner}/{name}/releases/latest` endpoint directly
+    // via `Update::get_latest_release` so we agree, by construction, with what
+    // `cct update` and `install.sh` will install. That endpoint returns "the
+    // most recent non-prerelease, non-draft release, sorted by created_at",
+    // so we don't have to reimplement that selection on the client. The
+    // earlier implementation iterated `ReleaseList::fetch()` and skipped tags
+    // containing `-`, which silently disagreed when a stable patch (e.g.
+    // 0.2.1) was published after a newer minor (e.g. 0.3.0).
+    //
+    // We don't call `update()`; we only need the tag. The `bin_name` and
+    // `bin_install_path` values below are required by the builder but are
+    // never read by `get_latest_release`. We pass an explicit dummy install
+    // path so the builder doesn't shell out to `env::current_exe()`, which
+    // would convert a sandbox quirk into a misleading config error.
+    let release = self_update::backends::github::Update::configure()
         .repo_owner(REPO_OWNER)
         .repo_name(REPO_NAME)
+        .bin_name("cct")
+        .bin_install_path("/dev/null")
+        .current_version(self_update::cargo_crate_version!())
         .build()?
-        .fetch()?;
+        .get_latest_release()?;
     // `Release.version` already has the leading `v` stripped by self_update.
-    // Filter pre-releases (anything containing a `-`, per SemVer 2.0 §9) so
-    // we agree with `cct update` and `install.sh`, both of which hit the
-    // /releases/latest endpoint that filters pre-releases server-side.
-    let latest = releases
-        .iter()
-        .find(|r| !r.version.contains('-'))
-        .ok_or("no stable release published")?
-        .version
-        .clone();
-    Ok(latest)
+    Ok(release.version)
 }
 
 fn now_unix() -> u64 {
