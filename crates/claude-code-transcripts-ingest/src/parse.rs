@@ -1416,26 +1416,29 @@ mod tests {
     use super::*;
 
     /// Writes content to a uniquely-named temp file and deletes it on drop.
-    struct TempJsonl(PathBuf);
+    ///
+    /// Backed by `tempfile::NamedTempFile`, which uses a thread-local random
+    /// suffix + atomic counter so paths cannot collide across threads in the
+    /// same process. The previous implementation derived the filename from
+    /// `process::id() + subsec_nanos()`, which collided when `cargo test` ran
+    /// multiple parse tests in parallel within the same PID — causing the
+    /// `unknown_*` tests to intermittently see each other's input lines.
+    struct TempJsonl(tempfile::NamedTempFile);
 
     impl TempJsonl {
         fn new(content: &str) -> Self {
-            let path = std::env::temp_dir().join(format!(
-                "cct-test-{}-{}.jsonl",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .subsec_nanos()
-            ));
-            std::fs::write(&path, content).unwrap();
-            TempJsonl(path)
+            let mut f = tempfile::Builder::new()
+                .prefix("cct-test-")
+                .suffix(".jsonl")
+                .tempfile()
+                .expect("create temp jsonl");
+            std::io::Write::write_all(f.as_file_mut(), content.as_bytes())
+                .expect("write temp jsonl");
+            TempJsonl(f)
         }
-    }
 
-    impl Drop for TempJsonl {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_file(&self.0);
+        fn path(&self) -> &Path {
+            self.0.path()
         }
     }
 
@@ -1448,7 +1451,7 @@ mod tests {
             r#"{{"type":"attachment","uuid":"a1",{ENVELOPE},"attachment":{{"type":"future_attachment_shape","payload":"foo"}}}}"#
         );
         let tmp = TempJsonl::new(&line);
-        let parsed = parse_file(&tmp.0, &HashMap::new());
+        let parsed = parse_file(tmp.path(), &HashMap::new());
 
         assert!(
             parsed.failures.is_empty(),
@@ -1471,7 +1474,7 @@ mod tests {
             r#"{{"type":"assistant","uuid":"b1",{ENVELOPE},"message":{{"id":"msg1","type":"message","role":"assistant","model":"claude-3-opus-20240229","content":[{{"type":"future_modality","data":"ignored"}}],"stop_reason":"end_turn","stop_sequence":null,"usage":{{"input_tokens":10,"output_tokens":5}}}}}}"#
         );
         let tmp = TempJsonl::new(&line);
-        let parsed = parse_file(&tmp.0, &HashMap::new());
+        let parsed = parse_file(tmp.path(), &HashMap::new());
 
         assert!(
             parsed.failures.is_empty(),
@@ -1494,7 +1497,7 @@ mod tests {
             r#"{{"type":"user","uuid":"c1",{ENVELOPE},"message":{{"role":"user","content":[{{"type":"video","url":"https://example.com"}}]}}}}"#
         );
         let tmp = TempJsonl::new(&line);
-        let parsed = parse_file(&tmp.0, &HashMap::new());
+        let parsed = parse_file(tmp.path(), &HashMap::new());
 
         assert!(
             parsed.failures.is_empty(),
@@ -1517,7 +1520,7 @@ mod tests {
             r#"{{"type":"user","uuid":"d1",{ENVELOPE},"message":{{"role":"user","content":[{{"type":"image","source":{{"type":"s3_bucket","key":"test"}}}}]}}}}"#
         );
         let tmp = TempJsonl::new(&line);
-        let parsed = parse_file(&tmp.0, &HashMap::new());
+        let parsed = parse_file(tmp.path(), &HashMap::new());
 
         assert!(
             parsed.failures.is_empty(),
@@ -1538,7 +1541,7 @@ mod tests {
             r#"{{"type":"user","uuid":"e1",{ENVELOPE},"message":{{"role":"user","content":[{{"type":"document","source":{{"type":"pdf_url","url":"https://example.com/doc.pdf"}}}}]}}}}"#
         );
         let tmp = TempJsonl::new(&line);
-        let parsed = parse_file(&tmp.0, &HashMap::new());
+        let parsed = parse_file(tmp.path(), &HashMap::new());
 
         assert!(
             parsed.failures.is_empty(),
@@ -1564,7 +1567,7 @@ mod tests {
             r#"{{"type":"attachment","uuid":"f1",{ENVELOPE},"attachment":{{"type":"nested_memory","path":"/p/CLAUDE.md","content":{{"path":"/p/CLAUDE.md","type":"Project","content":"body","contentDiffersFromDisk":false}},"displayPath":"CLAUDE.md"}}}}"#
         );
         let tmp = TempJsonl::new(&line);
-        let parsed = parse_file(&tmp.0, &HashMap::new());
+        let parsed = parse_file(tmp.path(), &HashMap::new());
 
         assert!(
             parsed.failures.is_empty(),
@@ -1606,7 +1609,7 @@ mod tests {
             r#"{"type":"attachment","uuid":"g3","parentUuid":null,"isSidechain":false,"sessionId":"s","timestamp":"2024-01-01T00:00:00.000000Z","attachment":{"type":"todo_reminder","content":[],"itemCount":0}}"#,
         ];
         let tmp = TempJsonl::new(&lines.join("\n"));
-        let parsed = parse_file(&tmp.0, &HashMap::new());
+        let parsed = parse_file(tmp.path(), &HashMap::new());
 
         assert!(parsed.failures.is_empty(), "{:?}", parsed.failures);
         assert!(
